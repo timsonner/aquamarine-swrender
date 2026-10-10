@@ -48,6 +48,48 @@ index be4f033a..d6bddc5a 100644
 +    std::ranges::transform(lower, lower.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
 +    return lower.starts_with("true") || lower.starts_with("yes") || lower.starts_with("on");
  }
+diff --git a/src/managers/ProtocolManager.cpp b/src/managers/ProtocolManager.cpp
+index bf20269c..7248615c 100644
+--- a/src/managers/ProtocolManager.cpp
++++ b/src/managers/ProtocolManager.cpp
+@@ -255,7 +255,12 @@ CProtocolManager::CProtocolManager() {
+         }
+     }
+ 
+-    if (!g_pHyprRenderer->getDRMFormats().empty()) {
++    // llvmpipe still fills getDRMFormats() with no render node. Binding the globals
++    // and then removeGlobal() on the ready event leaves a window where a client
++    // can bind zwp_linux_dmabuf_v1 against a display that has no DRM device.
++    if (g_pCompositor->m_aqBackend->drmFD() < 0)
++        Log::logger->log(Log::WARN, "ProtocolManager: no DRM fd, not advertising linux-dmabuf or wl_drm");
++    else if (!g_pHyprRenderer->getDRMFormats().empty()) {
+         PROTO::mesaDRM  = makeUnique<CMesaDRMProtocol>(&wl_drm_interface, 2, "MesaDRM");
+         PROTO::linuxDma = makeUnique<CLinuxDMABufV1Protocol>(&zwp_linux_dmabuf_v1_interface, 5, "LinuxDMABUF");
+     } else
+diff --git a/src/protocols/ImageCopyCapture.cpp b/src/protocols/ImageCopyCapture.cpp
+index 20d990b4..19a8326c 100644
+--- a/src/protocols/ImageCopyCapture.cpp
++++ b/src/protocols/ImageCopyCapture.cpp
+@@ -81,7 +81,9 @@ void CImageCopyCaptureSession::sendConstraints() {
+         wl_array_release(&modsArr);
+     }
+ 
+-    dev_t           device    = PROTO::linuxDma->getMainDevice();
++    // ext-image-copy-capture always sends a dmabuf device. With no DRM fd the protocol
++    // object is absent, and 0 matches the shm-only constraints sent above.
++    dev_t           device    = PROTO::linuxDma ? PROTO::linuxDma->getMainDevice() : 0;
+     struct wl_array deviceArr = {
+         .size = sizeof(device),
+         .data = sc<void*>(&device),
+@@ -291,7 +293,7 @@ void CImageCopyCaptureCursorSession::sendConstraints() {
+     m_sessionResource->sendDmabufFormat(format, &modsArr);
+     wl_array_release(&modsArr);
+ 
+-    dev_t           device    = PROTO::linuxDma->getMainDevice();
++    dev_t           device    = PROTO::linuxDma ? PROTO::linuxDma->getMainDevice() : 0;
+     struct wl_array deviceArr = {
+         .size = sizeof(device),
+         .data = sc<void*>(&device),
 diff --git a/src/render/OpenGL.cpp b/src/render/OpenGL.cpp
 index baee1ad2..8852dbcc 100644
 --- a/src/render/OpenGL.cpp

@@ -22,12 +22,13 @@ wait_rows() {
         fi
         sleep 0.1
     done
-    echo "tty stayed at $(stty size 2>/dev/null || echo unknown), needed ${need} rows" >&2
 }
 
 pane_info() {
     set +e
-    wait_rows 40
+    # eglinfo returns non-zero when GBM or X11 fail. pipefail would hide a successful grep.
+    set +o pipefail
+    wait_rows 36
     PS4='+ '
     set -x
     if ! fastfetch; then
@@ -44,7 +45,8 @@ pane_info() {
 
 pane_gfx() {
     set +e
-    wait_rows 52
+    set +o pipefail
+    wait_rows 58
     PS4='+ '
     set -x
     hyprctl monitors
@@ -110,9 +112,9 @@ hl.monitor({
 
 hl.config({
     general = {
-        gaps_in = 8,
-        gaps_out = 12,
-        border_size = 6,
+        gaps_in = 6,
+        gaps_out = 8,
+        border_size = 4,
         col = {
             active_border = "rgba(ff8800ff)",
             inactive_border = "rgba(ff8800ff)",
@@ -206,11 +208,12 @@ if [[ -z "$signature" ]]; then
 fi
 export HYPRLAND_INSTANCE_SIGNATURE="$signature"
 
-FOOT_FONT="${FOOT_FONT:-JetBrains Mono:pixelsize=15}"
-foot -a proof-info -T proof-info -o dpi-aware=no -f "$FOOT_FONT" \
+# 13px keeps hyprctl monitors on screen, including the HEADLESS-1 line. 15px scrolled it off.
+FOOT_FONT="${FOOT_FONT:-JetBrains Mono:pixelsize=13}"
+foot -a proof-info -T proof-info -o dpi-aware=no -o pad=2x2 -f "$FOOT_FONT" \
     "$ROOT/scripts/proof-terminal.sh" --pane info \
     >"$ROOT/.build/foot-info.log" 2>&1 &
-foot -a proof-gfx -T proof-gfx -o dpi-aware=no -f "$FOOT_FONT" \
+foot -a proof-gfx -T proof-gfx -o dpi-aware=no -o pad=2x2 -f "$FOOT_FONT" \
     "$ROOT/scripts/proof-terminal.sh" --pane gfx \
     >"$ROOT/.build/foot-gfx.log" 2>&1 &
 

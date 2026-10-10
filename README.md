@@ -15,8 +15,9 @@ This VM has no `/dev/dri`. The build ran on the VM with gcc 15.2.0, CMake 3.31.8
 ```bash
 ./scripts/build.sh
 ./scripts/run-headless.sh proof/hyprland-headless.png
+./scripts/run-headless.sh --client
 ```
 
-`run-headless.sh` refuses to start if `/dev/dri` exists. It sets `LIBGL_ALWAYS_SOFTWARE=1` and `GALLIUM_DRIVER=llvmpipe`, waits for a Wayland socket, and runs `grim -o HEADLESS-1`. A successful run writes a 1920x1080 PNG. The checked-in shot is that output. The log line `Software renderer from GL_RENDERER: llvmpipe` and `shm: created an allocator` are the matching compositor evidence.
+`run-headless.sh` refuses to start if `/dev/dri` exists. It sets `LIBGL_ALWAYS_SOFTWARE=1` and `GALLIUM_DRIVER=llvmpipe`, starts Hyprland through `start-hyprland` with `scripts/headless.lua`, waits for a Wayland socket, and runs `grim -o HEADLESS-1`. `--client` builds `clients/shm-window.c`, waits until `hyprctl clients` lists `shm-window`, and writes `proof/hyprland-headless-client.png`. That client is an xdg-shell window filled from a `wl_shm` `ARGB8888` buffer.
 
 The committed proof was produced from the prefix already on this machine. A later incremental link of `Renderer.cpp` took 14 seconds. A single clean timing of the whole prefix was not recorded, because earlier `scripts/build.sh` runs stopped on missing packages and were resumed.

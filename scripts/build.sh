@@ -180,6 +180,8 @@ if [[ ! -d "$SRC/grim/.git" ]]; then
 fi
 meson_install "$SRC/grim" -Djpeg=enabled
 
+"$ROOT/scripts/build-client.sh"
+
 echo "built $PREFIX/bin/Hyprland"
 "$PREFIX/bin/Hyprland" --version || true
 pkg-config --modversion aquamarine hyprlang hyprutils wayland-server wayland-protocols xkbcommon libinput lua

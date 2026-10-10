@@ -1,0 +1,202 @@
+diff --git a/src/Compositor.cpp b/src/Compositor.cpp
+index 1d2d8b93..ec4247f4 100644
+--- a/src/Compositor.cpp
++++ b/src/Compositor.cpp
+@@ -340,6 +340,16 @@ void CCompositor::initServer(std::string socketName, int socketFd) {
+         throwError("CBackend::create() failed!");
+     }
+ 
++    if (m_aqBackend->drmFD() < 0) {
++        for (auto const& impl : m_aqBackend->getImplementations()) {
++            if (impl->type() != Aquamarine::eBackendType::AQ_BACKEND_HEADLESS)
++                continue;
++            if (!impl->createOutput("HEADLESS-1"))
++                Log::logger->log(Log::ERR, "Failed to create immediate headless output HEADLESS-1");
++            break;
++        }
++    }
++
+     m_initialized = true;
+ 
+     Log::logger->log(Log::DEBUG, "Instance Signature: {}", m_instanceSignature);
+diff --git a/src/helpers/MiscFunctions.cpp b/src/helpers/MiscFunctions.cpp
+index be4f033a..d6bddc5a 100644
+--- a/src/helpers/MiscFunctions.cpp
++++ b/src/helpers/MiscFunctions.cpp
+@@ -11,6 +11,7 @@
+ #include "../config/shared/workspace/WorkspaceRuleManager.hpp"
+ #include "fs/FsUtils.hpp"
+ #include <optional>
++#include <cctype>
+ #include <cstring>
+ #include <climits>
+ #include <cmath>
+@@ -832,13 +833,7 @@ bool truthy(const std::string& str) {
+     if (str == "1"sv)
+         return true;
+ 
+-    // clang-format off
+-    auto str_view = str | std::views::transform([](unsigned char ch) -> char {
+-        return sc<char>(std::tolower(ch));
+-    });
+-
+-    return [&](auto&&... prefixes) -> bool {
+-        return (... || std::ranges::starts_with(str_view, prefixes));
+-    }("true"sv, "yes"sv, "on"sv);
+-    // clang-format on
++    std::string lower = str;
++    std::ranges::transform(lower, lower.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
++    return lower.starts_with("true") || lower.starts_with("yes") || lower.starts_with("on");
+ }
+diff --git a/src/render/OpenGL.cpp b/src/render/OpenGL.cpp
+index baee1ad2..8852dbcc 100644
+--- a/src/render/OpenGL.cpp
++++ b/src/render/OpenGL.cpp
+@@ -149,7 +149,11 @@ static ShaderFeatureFlags globalFeatures() {
+         0;
+ }
+ 
+-void CHyprOpenGLImpl::initEGL(bool gbm) {
++#ifndef EGL_PLATFORM_SURFACELESS_MESA
++#define EGL_PLATFORM_SURFACELESS_MESA 0x31DD
++#endif
++
++void CHyprOpenGLImpl::initEGL(bool gbm, bool surfaceless) {
+     std::vector<EGLint> attrs;
+     if (m_exts.KHR_display_reference) {
+         attrs.push_back(EGL_TRACK_REFERENCES_KHR);
+@@ -158,7 +162,10 @@ void CHyprOpenGLImpl::initEGL(bool gbm) {
+ 
+     attrs.push_back(EGL_NONE);
+ 
+-    m_eglDisplay = m_proc.eglGetPlatformDisplayEXT(gbm ? EGL_PLATFORM_GBM_KHR : EGL_PLATFORM_DEVICE_EXT, gbm ? m_gbmDevice : m_eglDevice, attrs.data());
++    if (surfaceless)
++        m_eglDisplay = m_proc.eglGetPlatformDisplayEXT(EGL_PLATFORM_SURFACELESS_MESA, EGL_DEFAULT_DISPLAY, attrs.data());
++    else
++        m_eglDisplay = m_proc.eglGetPlatformDisplayEXT(gbm ? EGL_PLATFORM_GBM_KHR : EGL_PLATFORM_DEVICE_EXT, gbm ? m_gbmDevice : m_eglDevice, attrs.data());
+     if (m_eglDisplay == EGL_NO_DISPLAY)
+         RASSERT(false, "EGL: failed to create a platform display");
+ 
+@@ -339,6 +346,12 @@ CHyprOpenGLImpl::CHyprOpenGLImpl() : m_drmFD(g_pCompositor->m_drmRenderNode.fd >
+         }
+     }
+ 
++    if (!success && m_drmFD < 0 && EGLEXTENSIONS.contains("EGL_MESA_platform_surfaceless")) {
++        Log::logger->log(Log::WARN, "EGL: no DRM fd, using EGL_MESA_platform_surfaceless");
++        success = true;
++        initEGL(false, true);
++    }
++
+     if (!success) {
+         Log::logger->log(Log::WARN, "EGL: EXT_platform_device or EGL_EXT_device_query not supported, using gbm");
+         if (EGLEXTENSIONS.contains("KHR_platform_gbm")) {
+diff --git a/src/render/OpenGL.hpp b/src/render/OpenGL.hpp
+index fc0e3456..a68b4cac 100644
+--- a/src/render/OpenGL.hpp
++++ b/src/render/OpenGL.hpp
+@@ -326,7 +326,7 @@ namespace Render::GL {
+         GLuint                           m_currentProgram;
+ 
+         void                             initDRMFormats();
+-        void                             initEGL(bool gbm);
++        void                             initEGL(bool gbm, bool surfaceless = false);
+         EGLDeviceEXT                     eglDeviceFromDRMFD(int drmFD);
+ 
+         // for the final shader
+diff --git a/src/render/Renderer.cpp b/src/render/Renderer.cpp
+index 249f0843..a1546741 100644
+--- a/src/render/Renderer.cpp
++++ b/src/render/Renderer.cpp
+@@ -78,6 +78,7 @@ using namespace Render;
+ 
+ extern "C" {
+ #include <xf86drm.h>
++#include <GLES3/gl32.h>
+ }
+ 
+ static int cursorTicker(void* data) {
+@@ -138,6 +139,20 @@ IHyprRenderer::IHyprRenderer() {
+         drmFreeVersion(DRMV);
+     }
+ 
++    // CHyprOpenGLImpl leaves the context unbound. glGetString is a no-op until it is current again.
++    const bool rebound = GL::g_pHyprOpenGL->m_eglDisplay && GL::g_pHyprOpenGL->m_eglContext != EGL_NO_CONTEXT &&
++        eglMakeCurrent(GL::g_pHyprOpenGL->m_eglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, GL::g_pHyprOpenGL->m_eglContext);
++    if (const auto* glRenderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER))) {
++        std::string name{glRenderer};
++        std::ranges::transform(name, name.begin(), tolower);
++        if (name.contains("llvmpipe") || name.contains("softpipe") || name.contains("software rasterizer")) {
++            m_software = true;
++            Log::logger->log(Log::DEBUG, "Software renderer from GL_RENDERER: {}", name);
++        }
++    }
++    if (rebound)
++        eglMakeCurrent(GL::g_pHyprOpenGL->m_eglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
++
+     if (m_nvidia)
+         Log::logger->log(Log::WARN, "NVIDIA detected, please remember to follow nvidia instructions on the wiki");
+ 
+diff --git a/src/render/gl/GLRenderbuffer.cpp b/src/render/gl/GLRenderbuffer.cpp
+index 794d0350..75c969f0 100644
+--- a/src/render/gl/GLRenderbuffer.cpp
++++ b/src/render/gl/GLRenderbuffer.cpp
+@@ -10,6 +10,7 @@
+ #include <hyprutils/signal/Signal.hpp>
+ 
+ #include <dlfcn.h>
++#include <drm_fourcc.h>
+ 
+ using namespace Render::GL;
+ 
+@@ -33,23 +34,44 @@ CGLRenderbuffer::~CGLRenderbuffer() {
+ 
+ CGLRenderbuffer::CGLRenderbuffer(SP<Aquamarine::IBuffer> buffer, uint32_t format) : IRenderbuffer(buffer, format) {
+     auto dma = buffer->dmabuf();
++    auto shm = buffer->shm();
+ 
+-    m_image = g_pHyprOpenGL->createEGLImage(dma);
+-    if (m_image == EGL_NO_IMAGE_KHR) {
+-        Log::logger->log(Log::ERR, "rb: createEGLImage failed");
++    glGenRenderbuffers(1, &m_rbo);
++    glBindRenderbuffer(GL_RENDERBUFFER, m_rbo);
++
++    uint32_t drmFormat = DRM_FORMAT_INVALID;
++    if (dma.success) {
++        m_image = g_pHyprOpenGL->createEGLImage(dma);
++        if (m_image == EGL_NO_IMAGE_KHR) {
++            Log::logger->log(Log::ERR, "rb: createEGLImage failed");
++            glBindRenderbuffer(GL_RENDERBUFFER, 0);
++            return;
++        }
++        g_pHyprOpenGL->m_proc.glEGLImageTargetRenderbufferStorageOES(GL_RENDERBUFFER, m_image);
++        drmFormat = dma.format;
++    } else if (shm.success) {
++        const int width  = static_cast<int>(shm.size.x);
++        const int height = static_cast<int>(shm.size.y);
++        if (width <= 0 || height <= 0) {
++            Log::logger->log(Log::ERR, "rb: shm buffer has no size");
++            glBindRenderbuffer(GL_RENDERBUFFER, 0);
++            return;
++        }
++        glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, width, height);
++        drmFormat = shm.format;
++    } else {
++        Log::logger->log(Log::ERR, "rb: buffer is neither dmabuf nor shm");
++        glBindRenderbuffer(GL_RENDERBUFFER, 0);
+         return;
+     }
+ 
+-    glGenRenderbuffers(1, &m_rbo);
+-    glBindRenderbuffer(GL_RENDERBUFFER, m_rbo);
+-    g_pHyprOpenGL->m_proc.glEGLImageTargetRenderbufferStorageOES(GL_RENDERBUFFER, m_image);
+     glBindRenderbuffer(GL_RENDERBUFFER, 0);
+ 
+     m_framebuffer = makeShared<CGLFramebuffer>();
+     glGenFramebuffers(1, &GLFB(m_framebuffer)->m_fb);
+     GLFB(m_framebuffer)->m_fbAllocated = true;
+     m_framebuffer->m_size              = buffer->size;
+-    m_framebuffer->m_drmFormat         = dma.format;
++    m_framebuffer->m_drmFormat         = drmFormat;
+     m_framebuffer->bind();
+     glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, m_rbo);
+ 

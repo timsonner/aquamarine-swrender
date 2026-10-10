@@ -1,0 +1,321 @@
+diff --git a/include/aquamarine/allocator/Allocator.hpp b/include/aquamarine/allocator/Allocator.hpp
+index 2dc1ee5..2f6730d 100644
+--- a/include/aquamarine/allocator/Allocator.hpp
++++ b/include/aquamarine/allocator/Allocator.hpp
+@@ -17,6 +17,7 @@ namespace Aquamarine {
+     enum eAllocatorType {
+         AQ_ALLOCATOR_TYPE_GBM = 0,
+         AQ_ALLOCATOR_TYPE_DRM_DUMB,
++        AQ_ALLOCATOR_TYPE_SHM,
+     };
+ 
+     class IAllocator {
+diff --git a/include/aquamarine/allocator/SHM.hpp b/include/aquamarine/allocator/SHM.hpp
+new file mode 100644
+index 0000000..e22e0c2
+--- /dev/null
++++ b/include/aquamarine/allocator/SHM.hpp
+@@ -0,0 +1,56 @@
++#pragma once
++
++#include "Allocator.hpp"
++
++namespace Aquamarine {
++    class CSHMAllocator;
++    class CBackend;
++    class CSwapchain;
++
++    class CSHMBuffer : public IBuffer {
++      public:
++        virtual ~CSHMBuffer();
++
++        virtual eBufferCapability                      caps();
++        virtual eBufferType                            type();
++        virtual void                                   update(const Hyprutils::Math::CRegion& damage);
++        virtual bool                                   isSynchronous();
++        virtual bool                                   good();
++        virtual SSHMAttrs                              shm();
++        virtual std::tuple<uint8_t*, uint32_t, size_t> beginDataPtr(uint32_t flags);
++        virtual void                                   endDataPtr();
++
++      private:
++        CSHMBuffer(const SAllocatorBufferParams& params, Hyprutils::Memory::CWeakPointer<CSHMAllocator> allocator_);
++
++        Hyprutils::Memory::CWeakPointer<CSHMAllocator> allocator;
++
++        uint32_t                                       stride    = 0;
++        uint64_t                                       bufferLen = 0;
++        uint8_t*                                       data      = nullptr;
++        int                                            fd        = -1;
++        SSHMAttrs                                      attrs{.success = false};
++
++        friend class CSHMAllocator;
++    };
++
++    class CSHMAllocator : public IAllocator {
++      public:
++        ~CSHMAllocator();
++        static Hyprutils::Memory::CSharedPointer<CSHMAllocator> create(Hyprutils::Memory::CWeakPointer<CBackend> backend_);
++
++        virtual Hyprutils::Memory::CSharedPointer<IBuffer>      acquire(const SAllocatorBufferParams& params, Hyprutils::Memory::CSharedPointer<CSwapchain> swapchain_);
++        virtual Hyprutils::Memory::CSharedPointer<CBackend>     getBackend();
++        virtual int                                             drmFD();
++        virtual eAllocatorType                                  type();
++
++        Hyprutils::Memory::CWeakPointer<CSHMAllocator>          self;
++
++      private:
++        explicit CSHMAllocator(Hyprutils::Memory::CWeakPointer<CBackend> backend_);
++
++        Hyprutils::Memory::CWeakPointer<CBackend> backend;
++
++        friend class CSHMBuffer;
++    };
++};
+diff --git a/src/allocator/SHM.cpp b/src/allocator/SHM.cpp
+new file mode 100644
+index 0000000..9af50f1
+--- /dev/null
++++ b/src/allocator/SHM.cpp
+@@ -0,0 +1,144 @@
++#define _GNU_SOURCE
++
++#include <aquamarine/allocator/SHM.hpp>
++#include <aquamarine/backend/Backend.hpp>
++#include "FormatUtils.hpp"
++
++#include <cerrno>
++#include <cstring>
++#include <fcntl.h>
++#include <sys/mman.h>
++#include <unistd.h>
++
++using namespace Aquamarine;
++using namespace Hyprutils::Memory;
++#define SP CSharedPointer
++
++Aquamarine::CSHMBuffer::CSHMBuffer(const SAllocatorBufferParams& params, Hyprutils::Memory::CWeakPointer<CSHMAllocator> allocator_) : allocator(allocator_) {
++    uint32_t format = params.format;
++    if (format == DRM_FORMAT_INVALID)
++        format = DRM_FORMAT_XRGB8888;
++
++    if (format != DRM_FORMAT_XRGB8888 && format != DRM_FORMAT_ARGB8888) {
++        allocator->backend->log(AQ_LOG_ERROR, std::format("shm: refusing format {}", fourccToName(format)));
++        return;
++    }
++
++    const int width  = static_cast<int>(params.size.x);
++    const int height = static_cast<int>(params.size.y);
++    if (width <= 0 || height <= 0) {
++        allocator->backend->log(AQ_LOG_ERROR, "shm: refusing a buffer with an empty size");
++        return;
++    }
++
++    stride    = static_cast<uint32_t>(width) * 4;
++    bufferLen = static_cast<uint64_t>(stride) * static_cast<uint64_t>(height);
++
++    fd = memfd_create("aquamarine-shm", MFD_CLOEXEC);
++    if (fd < 0) {
++        allocator->backend->log(AQ_LOG_ERROR, std::format("shm: memfd_create failed: {}", strerror(errno)));
++        return;
++    }
++
++    if (ftruncate(fd, static_cast<off_t>(bufferLen)) < 0) {
++        allocator->backend->log(AQ_LOG_ERROR, std::format("shm: ftruncate failed: {}", strerror(errno)));
++        return;
++    }
++
++    void* mapped = mmap(nullptr, bufferLen, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
++    if (mapped == MAP_FAILED) {
++        allocator->backend->log(AQ_LOG_ERROR, std::format("shm: mmap failed: {}", strerror(errno)));
++        data = nullptr;
++        return;
++    }
++
++    data = static_cast<uint8_t*>(mapped);
++    memset(data, 0, bufferLen);
++
++    size            = {static_cast<double>(width), static_cast<double>(height)};
++    opaque          = format == DRM_FORMAT_XRGB8888;
++    attrs.success   = true;
++    attrs.fd        = fd;
++    attrs.format    = format;
++    attrs.size      = size;
++    attrs.stride    = static_cast<int>(stride);
++    attrs.offset    = 0;
++
++    allocator->backend->log(AQ_LOG_DEBUG, std::format("shm: allocated {}x{} {}", width, height, fourccToName(format)));
++}
++
++Aquamarine::CSHMBuffer::~CSHMBuffer() {
++    events.destroy.emit();
++
++    if (data)
++        munmap(data, bufferLen);
++
++    if (fd >= 0)
++        close(fd);
++}
++
++eBufferCapability Aquamarine::CSHMBuffer::caps() {
++    return eBufferCapability::BUFFER_CAPABILITY_DATAPTR;
++}
++
++eBufferType Aquamarine::CSHMBuffer::type() {
++    return eBufferType::BUFFER_TYPE_SHM;
++}
++
++void Aquamarine::CSHMBuffer::update(const Hyprutils::Math::CRegion& damage) {
++    ;
++}
++
++bool Aquamarine::CSHMBuffer::isSynchronous() {
++    return true;
++}
++
++bool Aquamarine::CSHMBuffer::good() {
++    return attrs.success && data;
++}
++
++SSHMAttrs Aquamarine::CSHMBuffer::shm() {
++    return attrs;
++}
++
++std::tuple<uint8_t*, uint32_t, size_t> Aquamarine::CSHMBuffer::beginDataPtr(uint32_t flags) {
++    return {data, attrs.format, bufferLen};
++}
++
++void Aquamarine::CSHMBuffer::endDataPtr() {
++    ;
++}
++
++Aquamarine::CSHMAllocator::~CSHMAllocator() {
++    ;
++}
++
++SP<CSHMAllocator> Aquamarine::CSHMAllocator::create(Hyprutils::Memory::CWeakPointer<CBackend> backend_) {
++    auto allocator  = SP<CSHMAllocator>(new CSHMAllocator(backend_));
++    allocator->self = allocator;
++    backend_->log(AQ_LOG_DEBUG, "shm: created an allocator");
++    return allocator;
++}
++
++SP<IBuffer> Aquamarine::CSHMAllocator::acquire(const SAllocatorBufferParams& params, SP<CSwapchain> swapchain_) {
++    auto buf = SP<IBuffer>(new CSHMBuffer(params, self));
++    if (!buf->good())
++        return nullptr;
++    return buf;
++}
++
++SP<CBackend> Aquamarine::CSHMAllocator::getBackend() {
++    return backend.lock();
++}
++
++int Aquamarine::CSHMAllocator::drmFD() {
++    return -1;
++}
++
++eAllocatorType Aquamarine::CSHMAllocator::type() {
++    return eAllocatorType::AQ_ALLOCATOR_TYPE_SHM;
++}
++
++Aquamarine::CSHMAllocator::CSHMAllocator(Hyprutils::Memory::CWeakPointer<CBackend> backend_) : backend(backend_) {
++    ;
++}
+diff --git a/src/allocator/Swapchain.cpp b/src/allocator/Swapchain.cpp
+index edc4aff..6ee5fe8 100644
+--- a/src/allocator/Swapchain.cpp
++++ b/src/allocator/Swapchain.cpp
+@@ -51,8 +51,16 @@ bool Aquamarine::CSwapchain::reconfigure(const SSwapchainOptions& options_) {
+         return false;
+ 
+     options = options_;
+-    if (options.format == DRM_FORMAT_INVALID)
+-        options.format = buffers.at(0)->dmabuf().format;
++    if (options.format == DRM_FORMAT_INVALID) {
++        const auto dma = buffers.at(0)->dmabuf();
++        if (dma.success)
++            options.format = dma.format;
++        else {
++            const auto shmAttrs = buffers.at(0)->shm();
++            if (shmAttrs.success)
++                options.format = shmAttrs.format;
++        }
++    }
+ 
+     allocator->getBackend()->log(AQ_LOG_DEBUG,
+                                  std::format("Swapchain: Reconfigured a swapchain to {} {} of length {}", options.size, fourccToName(options.format), options.length));
+@@ -83,9 +91,14 @@ bool Aquamarine::CSwapchain::fullReconfigure(const SSwapchainOptions& options_)
+             allocator->getBackend()->log(AQ_LOG_ERROR, "Swapchain: Failed acquiring a buffer");
+             return false;
+         }
+-        allocator->getBackend()->log(AQ_LOG_TRACE,
+-                                     std::format("Swapchain: Acquired a buffer with format {} and modifier 0x{:x} : {}", fourccToName(buf->dmabuf().format), buf->dmabuf().modifier,
+-                                                 drmModifierToName(buf->dmabuf().modifier)));
++        const auto dma      = buf->dmabuf();
++        const auto shmAttrs = buf->shm();
++        if (dma.success) {
++            allocator->getBackend()->log(AQ_LOG_TRACE, std::format("Swapchain: Acquired a buffer with format {} and modifier 0x{:x} : {}", fourccToName(dma.format), dma.modifier,
++                                                                   drmModifierToName(dma.modifier)));
++        } else if (shmAttrs.success) {
++            allocator->getBackend()->log(AQ_LOG_TRACE, std::format("Swapchain: Acquired an shm buffer with format {}", fourccToName(shmAttrs.format)));
++        }
+         bfs.emplace_back(buf);
+     }
+ 
+diff --git a/src/backend/Backend.cpp b/src/backend/Backend.cpp
+index dbd7147..b77b757 100644
+--- a/src/backend/Backend.cpp
++++ b/src/backend/Backend.cpp
+@@ -4,6 +4,7 @@
+ #include <aquamarine/backend/DRM.hpp>
+ #include <aquamarine/backend/Null.hpp>
+ #include <aquamarine/allocator/GBM.hpp>
++#include <aquamarine/allocator/SHM.hpp>
+ #include <hyprutils/os/FileDescriptor.hpp>
+ #include <ranges>
+ #include <sys/timerfd.h>
+@@ -174,8 +175,11 @@ bool Aquamarine::CBackend::start() {
+     }
+ 
+     if (!primaryAllocator && (implementations.empty() || implementations.at(0)->type() != AQ_BACKEND_NULL)) {
+-        log(AQ_LOG_CRITICAL, "Cannot open backend: no allocator available");
+-        return false;
++        primaryAllocator = CSHMAllocator::create(self);
++        if (!primaryAllocator) {
++            log(AQ_LOG_CRITICAL, "Cannot open backend: no allocator available");
++            return false;
++        }
+     }
+ 
+     ready = true;
+diff --git a/src/backend/Headless.cpp b/src/backend/Headless.cpp
+index 179b850..d10c821 100644
+--- a/src/backend/Headless.cpp
++++ b/src/backend/Headless.cpp
+@@ -161,23 +161,9 @@ std::vector<SDRMFormat> Aquamarine::CHeadlessBackend::getRenderFormats() {
+         return impl->getRenderableFormats();
+     }
+ 
+-    // formats probably supported by EGL
++    // 8-bit only. The shm allocator has no storage for the 10-bit fourccs.
+     return {SDRMFormat{.drmFormat = DRM_FORMAT_XRGB8888, .modifiers = {DRM_FORMAT_INVALID}},
+-            SDRMFormat{.drmFormat = DRM_FORMAT_XBGR8888, .modifiers = {DRM_FORMAT_INVALID}},
+-            SDRMFormat{.drmFormat = DRM_FORMAT_RGBX8888, .modifiers = {DRM_FORMAT_INVALID}},
+-            SDRMFormat{.drmFormat = DRM_FORMAT_BGRX8888, .modifiers = {DRM_FORMAT_INVALID}},
+-            SDRMFormat{.drmFormat = DRM_FORMAT_ARGB8888, .modifiers = {DRM_FORMAT_INVALID}},
+-            SDRMFormat{.drmFormat = DRM_FORMAT_ABGR8888, .modifiers = {DRM_FORMAT_INVALID}},
+-            SDRMFormat{.drmFormat = DRM_FORMAT_RGBA8888, .modifiers = {DRM_FORMAT_INVALID}},
+-            SDRMFormat{.drmFormat = DRM_FORMAT_BGRA8888, .modifiers = {DRM_FORMAT_INVALID}},
+-            SDRMFormat{.drmFormat = DRM_FORMAT_XRGB2101010, .modifiers = {DRM_FORMAT_MOD_LINEAR}},
+-            SDRMFormat{.drmFormat = DRM_FORMAT_XBGR2101010, .modifiers = {DRM_FORMAT_MOD_LINEAR}},
+-            SDRMFormat{.drmFormat = DRM_FORMAT_RGBX1010102, .modifiers = {DRM_FORMAT_MOD_LINEAR}},
+-            SDRMFormat{.drmFormat = DRM_FORMAT_BGRX1010102, .modifiers = {DRM_FORMAT_MOD_LINEAR}},
+-            SDRMFormat{.drmFormat = DRM_FORMAT_ARGB2101010, .modifiers = {DRM_FORMAT_MOD_LINEAR}},
+-            SDRMFormat{.drmFormat = DRM_FORMAT_ABGR2101010, .modifiers = {DRM_FORMAT_MOD_LINEAR}},
+-            SDRMFormat{.drmFormat = DRM_FORMAT_RGBA1010102, .modifiers = {DRM_FORMAT_MOD_LINEAR}},
+-            SDRMFormat{.drmFormat = DRM_FORMAT_BGRA1010102, .modifiers = {DRM_FORMAT_MOD_LINEAR}}};
++            SDRMFormat{.drmFormat = DRM_FORMAT_ARGB8888, .modifiers = {DRM_FORMAT_INVALID}}};
+ }
+ 
+ std::vector<SDRMFormat> Aquamarine::CHeadlessBackend::getCursorFormats() {

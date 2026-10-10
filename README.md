@@ -1,16 +1,26 @@
-# CPU-only Hyprland notes
+# aquamarine-swrender
 
-Notes on running Hyprland 0.56.2 / Aquamarine 0.15.1 with no DRM device and no GPU. This repository is the research record for that question. It does not vendor Hyprland.
+Unofficial notes and patches for running Hyprland 0.56.2 with Aquamarine 0.15.1 on a machine that has no GPU and no `/dev/dri`. This repository does not vendor either project. It is not affiliated with hyprwm, and nothing here has been submitted upstream.
 
-- [docs/PRIOR-ART.md](docs/PRIOR-ART.md) — issues, maintainer comments, CI, and how wlroots headless + pixman does it.
-- [docs/FEASIBILITY.md](docs/FEASIBILITY.md) — GBM/DRM dependency map, surfaceless EGL results from this VM, MVP patch plan, go recommendation.
-- [experiments/](experiments/) — a small surfaceless EGL + GLES probe. Build instructions are in [experiments/README.md](experiments/README.md).
+The patches are derived from Hyprland and Aquamarine. Both of those projects use the BSD 3-Clause license, and the patches stay under that license. Scripts, docs, and `clients/shm-window.c` in this repository are also BSD 3-Clause. See [LICENSE](LICENSE). The vendored pstack skills under `.cursor/` are MIT, Copyright (c) 2026 Lauren Tan. That notice is [.cursor/PSTACK-LICENSE](.cursor/PSTACK-LICENSE). The pin is recorded in [.cursor/PSTACK-VENDOR.md](.cursor/PSTACK-VENDOR.md).
 
-## Reproduce the headless screenshot
+## Status
 
-The patches and scripts rebuild Hyprland 0.56.2 (`efb50993780079460b0cbed1363e2166a2de1d9f`) and Aquamarine 0.15.1 (`f31c47a1b9d300847d8fc3108ad959448103dfc1`) into `.build/prefix`. The prefix is gitignored. Nothing is installed under `/usr`.
+The headless path works on this VM. Hyprland starts with an shm allocator and surfaceless EGL on llvmpipe, creates output `HEADLESS-1`, and grim can capture it.
 
-This VM has no `/dev/dri`. The build ran on the VM with gcc 15.2.0, CMake 3.31.8, and Meson 1.12.1. Ubuntu's default gcc 13 and CMake 3.28 cannot build this tree. `scripts/build.sh` downloads CMake 3.31.8 and uses `gcc-15` / `g++-15`.
+Three proofs are in `proof/`.
+
+- `proof/hyprland-headless.png` is the empty desktop.
+- `proof/hyprland-headless-client.png` is an xdg-shell window painted with `wl_shm`.
+- `proof/hyprland-headless-foot.png` is foot 1.16.2 showing `uname -a` and the line `CPU-only Hyprland`.
+
+Background is in [docs/PRIOR-ART.md](docs/PRIOR-ART.md) and [docs/FEASIBILITY.md](docs/FEASIBILITY.md). A small surfaceless EGL probe is in [experiments/](experiments/).
+
+## Reproduce
+
+`scripts/build.sh` rebuilds the pinned tags into `.build/prefix`. That directory is gitignored. The script does not install anything under `/usr`.
+
+Hyprland is `efb50993780079460b0cbed1363e2166a2de1d9f`. Aquamarine is `f31c47a1b9d300847d8fc3108ad959448103dfc1`. This tree needs gcc 15, CMake 3.31 or newer, and Meson 1.4 or newer. `scripts/build.sh` downloads CMake 3.31.8 and uses `gcc-15` and `g++-15`. The build that produced the proofs ran on Ubuntu 24.04.5 with gcc 15.2.0, CMake 3.31.8, and Meson 1.12.1. A single clean timing of the whole prefix was not recorded.
 
 ```bash
 ./scripts/build.sh
@@ -19,6 +29,10 @@ This VM has no `/dev/dri`. The build ran on the VM with gcc 15.2.0, CMake 3.31.8
 ./scripts/run-headless.sh --terminal
 ```
 
-`run-headless.sh` refuses to start if `/dev/dri` exists. It sets `LIBGL_ALWAYS_SOFTWARE=1` and `GALLIUM_DRIVER=llvmpipe`, starts Hyprland through `start-hyprland` with `scripts/headless.lua`, waits for a Wayland socket, and runs `grim -o HEADLESS-1`. `--client` builds `clients/shm-window.c`, waits until `hyprctl clients` lists `shm-window`, and writes `proof/hyprland-headless-client.png`. That client is an xdg-shell window filled from a `wl_shm` `ARGB8888` buffer. `--terminal` runs `foot` with `uname -a` and the line `CPU-only Hyprland`, then writes `proof/hyprland-headless-foot.png`. With no DRM fd the compositor does not advertise `zwp_linux_dmabuf_v1` or `wl_drm`, so foot's buffers are `wl_shm`.
+`run-headless.sh` exits if `/dev/dri` exists. It sets `LIBGL_ALWAYS_SOFTWARE=1` and `GALLIUM_DRIVER=llvmpipe`, starts Hyprland through `start-hyprland` with `scripts/headless.lua`, waits for a Wayland socket, and runs `grim -o HEADLESS-1`. `--client` builds `clients/shm-window.c` and waits until `hyprctl clients` lists `shm-window`. `--terminal` runs the system `foot` package with `uname -a` and the line `CPU-only Hyprland`, then waits until `hyprctl clients` lists `foot`.
 
-The committed proof was produced from the prefix already on this machine. A later incremental link of `Renderer.cpp` took 14 seconds. A single clean timing of the whole prefix was not recorded, because earlier `scripts/build.sh` runs stopped on missing packages and were resumed.
+With no DRM fd the compositor does not advertise `zwp_linux_dmabuf_v1` or `wl_drm`. Foot's buffers in the proof were `wl_shm`.
+
+## Limits
+
+There is no pixman renderer and no udmabuf path. Xwayland is configured off, and the Xwayland sources still compile. Input is untested. The monitor rule asks for 1920x1080 at 60 Hz. That number is the mode request, not a measured frame rate. During screencopy the log repeats `ensureBufferPresent` many times. The captured frames were still intact. `foot` is not built by `scripts/build.sh`. Install it separately.

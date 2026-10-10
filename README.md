@@ -16,8 +16,9 @@ This VM has no `/dev/dri`. The build ran on the VM with gcc 15.2.0, CMake 3.31.8
 ./scripts/build.sh
 ./scripts/run-headless.sh proof/hyprland-headless.png
 ./scripts/run-headless.sh --client
+./scripts/run-headless.sh --terminal
 ```
 
-`run-headless.sh` refuses to start if `/dev/dri` exists. It sets `LIBGL_ALWAYS_SOFTWARE=1` and `GALLIUM_DRIVER=llvmpipe`, starts Hyprland through `start-hyprland` with `scripts/headless.lua`, waits for a Wayland socket, and runs `grim -o HEADLESS-1`. `--client` builds `clients/shm-window.c`, waits until `hyprctl clients` lists `shm-window`, and writes `proof/hyprland-headless-client.png`. That client is an xdg-shell window filled from a `wl_shm` `ARGB8888` buffer.
+`run-headless.sh` refuses to start if `/dev/dri` exists. It sets `LIBGL_ALWAYS_SOFTWARE=1` and `GALLIUM_DRIVER=llvmpipe`, starts Hyprland through `start-hyprland` with `scripts/headless.lua`, waits for a Wayland socket, and runs `grim -o HEADLESS-1`. `--client` builds `clients/shm-window.c`, waits until `hyprctl clients` lists `shm-window`, and writes `proof/hyprland-headless-client.png`. That client is an xdg-shell window filled from a `wl_shm` `ARGB8888` buffer. `--terminal` runs `foot` with `uname -a` and the line `CPU-only Hyprland`, then writes `proof/hyprland-headless-foot.png`. With no DRM fd the compositor does not advertise `zwp_linux_dmabuf_v1` or `wl_drm`, so foot's buffers are `wl_shm`.
 
 The committed proof was produced from the prefix already on this machine. A later incremental link of `Renderer.cpp` took 14 seconds. A single clean timing of the whole prefix was not recorded, because earlier `scripts/build.sh` runs stopped on missing packages and were resumed.

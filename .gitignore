@@ -1,1 +1,73 @@
+# Private build tree from scripts/build.sh.
+# Holds cloned sources (aquamarine, Hyprland, grim, and the hypr* deps),
+# CMake/Meson build dirs, the CMake tarball, and the install prefix.
 .build/
+
+# Same trees, build dirs, and prefixes if they are created at the repo root.
+/aquamarine/
+/Aquamarine/
+/Hyprland/
+/hyprland/
+/grim/
+/hyprutils/
+/hyprwayland-scanner/
+/hyprlang/
+/hyprcursor/
+/hyprgraphics/
+/hyprland-protocols/
+/hyprwire/
+/wayland/
+/wayland-protocols/
+/libxkbcommon/
+/libinput/
+/libdisplay-info/
+/lua-5.5.0/
+/build/
+/prefix/
+/install/
+/cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+meson-info/
+meson-logs/
+meson-private/
+compile_commands.json
+*.o
+*.a
+*.so
+*.so.*
+
+# Runtime dir. scripts/run-headless.sh uses /tmp/hypr-rt, which is outside
+# this repo. Ignore an in-tree copy and the sockets Hyprland drops when
+# XDG_RUNTIME_DIR points at the working tree.
+/hypr-rt/
+/runtime/
+/hypr/
+/wayland-*
+hyprlandCrashReport*
+
+# Logs
+*.log
+
+# Scratch screenshots. The committed proofs under proof/ stay tracked.
+*.png
+!proof/*.png
+
+# Agent scratch
+/agent-tools/
+
+# Editor and OS cruft
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+*~
+*.swp
+*.swo
+*.swn
+.idea/
+.vscode/
+*.code-workspace

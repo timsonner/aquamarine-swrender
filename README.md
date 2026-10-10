@@ -18,7 +18,7 @@ Background is in [docs/PRIOR-ART.md](docs/PRIOR-ART.md) and [docs/FEASIBILITY.md
 
 ## Reproduce
 
-`scripts/build.sh` rebuilds the pinned tags into `.build/prefix`. That directory is gitignored. The script does not install anything under `/usr`.
+`scripts/build.sh` rebuilds the pinned tags into `.build/prefix`. That directory is gitignored, along with cloned upstream trees, other build directories, the install prefix, the runtime directory, logs, editor files, and PNG files outside `proof/`. The screenshots in `proof/` stay tracked. The script does not install anything under `/usr`.
 
 Hyprland is `efb50993780079460b0cbed1363e2166a2de1d9f`. Aquamarine is `f31c47a1b9d300847d8fc3108ad959448103dfc1`. This tree needs gcc 15, CMake 3.31 or newer, and Meson 1.4 or newer. `scripts/build.sh` downloads CMake 3.31.8 and uses `gcc-15` and `g++-15`. The build that produced the proofs ran on Ubuntu 24.04.5 with gcc 15.2.0, CMake 3.31.8, and Meson 1.12.1. A single clean timing of the whole prefix was not recorded.
 

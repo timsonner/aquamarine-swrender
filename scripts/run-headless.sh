@@ -28,10 +28,16 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# The foot proof is produced by scripts/proof-terminal.sh, including the commands in the shot.
+if [[ "$TERMINAL" -eq 1 ]]; then
+    if [[ -n "$SHOT" ]]; then
+        exec "$ROOT/scripts/proof-terminal.sh" "$SHOT"
+    fi
+    exec "$ROOT/scripts/proof-terminal.sh"
+fi
+
 if [[ -z "$SHOT" ]]; then
-    if [[ "$TERMINAL" -eq 1 ]]; then
-        SHOT="$ROOT/proof/hyprland-headless-foot.png"
-    elif [[ "$CLIENT" -eq 1 ]]; then
+    if [[ "$CLIENT" -eq 1 ]]; then
         SHOT="$ROOT/proof/hyprland-headless-client.png"
     else
         SHOT="$ROOT/proof/hyprland-headless.png"
@@ -158,48 +164,6 @@ if [[ "$CLIENT" -eq 1 ]]; then
         echo "shm-window did not map" >&2
         "$PREFIX/bin/hyprctl" clients >&2 || true
         tail -40 "$LOG" >&2
-        exit 1
-    fi
-fi
-
-if [[ "$TERMINAL" -eq 1 ]]; then
-    signature=""
-    for _ in $(seq 1 40); do
-        signature="$(find "$RUNTIME/hypr" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | head -1 || true)"
-        if [[ -n "$signature" ]]; then
-            break
-        fi
-        sleep 0.1
-    done
-    if [[ -z "$signature" ]]; then
-        echo "no Hyprland instance signature" >&2
-        tail -40 "$LOG" >&2
-        exit 1
-    fi
-    export HYPRLAND_INSTANCE_SIGNATURE="$signature"
-    if [[ ! -x "$(command -v foot)" ]]; then
-        echo "foot is not installed" >&2
-        exit 1
-    fi
-    foot -e sh -c 'uname -a; echo CPU-only Hyprland; sleep 30' >"$ROOT/.build/foot.log" 2>&1 &
-    CPID=$!
-    mapped=0
-    for _ in $(seq 1 40); do
-        if ! kill -0 "$CPID" 2>/dev/null; then
-            echo "foot exited before mapping" >&2
-            tail -40 "$ROOT/.build/foot.log" >&2
-            exit 1
-        fi
-        if "$PREFIX/bin/hyprctl" clients 2>/dev/null | grep -q 'foot'; then
-            mapped=1
-            break
-        fi
-        sleep 0.25
-    done
-    if [[ "$mapped" -ne 1 ]]; then
-        echo "foot did not map" >&2
-        "$PREFIX/bin/hyprctl" clients >&2 || true
-        tail -40 "$ROOT/.build/foot.log" >&2
         exit 1
     fi
 fi

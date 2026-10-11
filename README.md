@@ -2,17 +2,18 @@
 
 Unofficial notes and patches for running Hyprland 0.56.2 with Aquamarine 0.15.1 on a machine that has no GPU and no `/dev/dri`. This repository does not vendor either project. It is not affiliated with hyprwm, and nothing here has been submitted upstream.
 
-The patches are derived from Hyprland and Aquamarine. Both of those projects use the BSD 3-Clause license, and the patches stay under that license. Scripts, docs, and the C clients under `clients/` in this repository are also BSD 3-Clause. See [LICENSE](LICENSE). The vendored pstack skills under `.cursor/` are MIT, Copyright (c) 2026 Lauren Tan. That notice is [.cursor/PSTACK-LICENSE](.cursor/PSTACK-LICENSE). The pin is recorded in [.cursor/PSTACK-VENDOR.md](.cursor/PSTACK-VENDOR.md).
+The patches are derived from Hyprland and Aquamarine. Both of those projects use the BSD 3-Clause license, and the patches stay under that license. Scripts, docs, and the C clients under `clients/` in this repository are also BSD 3-Clause. See [LICENSE](LICENSE). `clients/virtual-keyboard-unstable-v1.xml` and `clients/wlr-virtual-pointer-unstable-v1.xml` keep the MIT notices in those files. The vendored pstack skills under `.cursor/` are MIT, Copyright (c) 2026 Lauren Tan. That notice is [.cursor/PSTACK-LICENSE](.cursor/PSTACK-LICENSE). The pin is recorded in [.cursor/PSTACK-VENDOR.md](.cursor/PSTACK-VENDOR.md).
 
 ## Status
 
 The headless path works on this VM. Hyprland starts with an shm allocator and surfaceless EGL on llvmpipe, creates output `HEADLESS-1`, and grim can capture it.
 
-Three proofs are in `proof/`.
+The proofs are in `proof/`.
 
 - `proof/hyprland-headless.png` is the empty desktop.
 - `proof/hyprland-headless-client.png` is an xdg-shell window painted with `wl_shm`.
 - `proof/hyprland-headless-foot.png` is foot 1.16.2. The left pane runs `neofetch --stdout` after `fastfetch` fails, then `ls -l /dev/dri`, an `lspci` GPU query, and a filtered `eglinfo -B`. The right pane runs `hyprctl monitors` and `hyprctl version`. The capture script is [scripts/proof-terminal.sh](scripts/proof-terminal.sh).
+- `proof/hyprland-headless-input.png` is foot after a virtual keyboard types `echo KEYBOARD-OK-7741` and a virtual pointer drag-selects the output. The capture script is [scripts/proof-input.sh](scripts/proof-input.sh).
 
 Background is in [docs/PRIOR-ART.md](docs/PRIOR-ART.md) and [docs/FEASIBILITY.md](docs/FEASIBILITY.md). A small surfaceless EGL probe is in [experiments/](experiments/).
 
@@ -97,8 +98,16 @@ One run of `./scripts/measure-fps.sh`:
 
 The static mean sits above the p50 because one interval was 101.941 ms.
 
+## Input
+
+`scripts/proof-input.sh` opens foot in the headless session and drives it with `clients/vinput.c`. The shot is `proof/hyprland-headless-input.png`. The client binds `zwp_virtual_keyboard_v1` and `zwlr_virtual_pointer_v1`. It types `echo KEYBOARD-OK-7741` and Enter. The next line is that command's output, and a left-button drag selects it. The white selection in the shot is the click.
+
+Hyprland forwards virtual-keyboard keycodes and applies modifiers from the modifiers request, so Shift is sent as Left Shift and as the Shift mask. The keymap is xkb `evdev` / `pc105` / `us`. Creating the virtual pointer adds the pointer bit to the seat. The client round-trips once before the first warp so foot can bind `wl_pointer`. On this run the first warp was consumed by `wl_pointer.enter` at `-1, -1`, so the client warps to the selection start a second time before pressing `BTN_LEFT`.
+
+`/dev/uinput` does not exist here, so ydotool cannot open a kernel device. `wtype --help` prints `Missing argument to --help` and exits. The headless backend's `setCursor` returns false. The I-beam in the shot is the cursor foot set, drawn into the frame grim captured.
+
 ## Limits
 
-There is no pixman renderer and no udmabuf path. Xwayland is configured off, and the Xwayland sources still compile. Input is untested. `foot` is not built by `scripts/build.sh`. The foot proof also needs `neofetch`, `pciutils`, and `mesa-utils` on the host.
+There is no pixman renderer and no udmabuf path. Xwayland is configured off, and the Xwayland sources still compile. `foot` is not built by `scripts/build.sh`. The foot proof also needs `neofetch`, `pciutils`, and `mesa-utils` on the host.
 
 `CMonitorState::ensureBufferPresent` returns early only when the pending buffer is a dmabuf whose fourcc matches `m_drmFormat`. The headless swapchain buffers are shm. `CSHMBuffer` stores `DRM_FORMAT_XRGB8888` (the log names it XR24), so `dmabuf().success` is false. Each `commit()` and each `test()` then logs `no buffer or mismatched format, attaching one from the swapchain for modeset being possible`, attaches `swapchain->next(nullptr)`, and calls `rollback()`. One `grim -o HEADLESS-1` of the empty desktop logged that line 73 times. The Hyprland patch now also returns early when `shm().success` is set and `shm().format` matches `m_drmFormat`. The same capture then logged the line once, on the first mode test, before any buffer was pending. Later commits kept the shm buffer, and grim still wrote a 1920x1080 PNG.

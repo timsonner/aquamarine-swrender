@@ -106,6 +106,25 @@ Hyprland forwards virtual-keyboard keycodes and applies modifiers from the modif
 
 `/dev/uinput` does not exist here, so ydotool cannot open a kernel device. `wtype --help` prints `Missing argument to --help` and exits. The headless backend's `setCursor` returns false. The I-beam in the shot is the cursor foot set, drawn into the frame grim captured.
 
+## Smoke
+
+`scripts/smoke-app.sh` launches one command inside the headless session, waits until `hyprctl clients -j` lists a mapped window, takes `grim -o HEADLESS-1`, and measures the population variance of Rec. 709 luminance in that window's rectangle (`at` and `size`). A crop larger than 250000 pixels is sampled on a stride of 2.
+
+```bash
+scripts/smoke-app.sh [--timeout SEC] [--shot PATH] [--min-variance N] [--class NAME] -- CMD [ARGS...]
+```
+
+`--class` keeps a client whose class, initial class, or title contains that string. The same values can be set with `SMOKE_TIMEOUT` (default 20), `SMOKE_SHOT` (default `.build/smoke-app.png`), and `SMOKE_MIN_VARIANCE` (default 25). The script refuses to start when `/dev/dri` exists.
+
+| Exit | Meaning |
+| --- | --- |
+| 0 | A mapped window's crop is at or above the variance threshold |
+| 1 | The compositor died, grim failed, the PNG could not be read, or the arguments are wrong |
+| 2 | No mapped window before the timeout |
+| 3 | A window mapped and the crop is under the variance threshold |
+
+On this VM, `scripts/smoke-app.sh` with no arguments exited 1. `scripts/smoke-app.sh --timeout 2 -- true` exited 2. `scripts/smoke-app.sh --timeout 15 --class shm-window -- .build/prefix/bin/shm-window` exited 0 with variance 1774.3871 on a 1744x904 crop at 88,88. The same command with `--min-variance 1000000` exited 3 with variance 1707.5459. Replacing `grim` with a program that exits 1 made the script exit 1 and print `grim-failed`.
+
 ## Limits
 
 There is no pixman renderer and no udmabuf path. Xwayland is configured off, and the Xwayland sources still compile. `foot` is not built by `scripts/build.sh`. The foot proof also needs `neofetch`, `pciutils`, and `mesa-utils` on the host.

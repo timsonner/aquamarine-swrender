@@ -242,3 +242,17 @@ index 794d0350..75c969f0 100644
      m_framebuffer->bind();
      glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, m_rbo);
  
+diff --git a/src/output/Monitor.cpp b/src/output/Monitor.cpp
+--- a/src/output/Monitor.cpp
++++ b/src/output/Monitor.cpp
+@@ -2642,7 +2642,9 @@ void CMonitorState::ensureBufferPresent() {
+     }
+ 
+     if (STATE.buffer) {
+-        if (const auto params = STATE.buffer->dmabuf(); params.success && params.format == m_owner->m_drmFormat)
++        const auto dma = STATE.buffer->dmabuf();
++        const auto shm = STATE.buffer->shm();
++        if ((dma.success && dma.format == m_owner->m_drmFormat) || (shm.success && shm.format == m_owner->m_drmFormat))
+             return;
+     }
+ 

@@ -2,7 +2,7 @@
 
 Unofficial notes and patches for running Hyprland 0.56.2 with Aquamarine 0.15.1 on a machine that has no GPU and no `/dev/dri`. This repository does not vendor either project. It is not affiliated with hyprwm, and nothing here has been submitted upstream.
 
-The patches are derived from Hyprland and Aquamarine. Both of those projects use the BSD 3-Clause license, and the patches stay under that license. Scripts, docs, and `clients/shm-window.c` in this repository are also BSD 3-Clause. See [LICENSE](LICENSE). The vendored pstack skills under `.cursor/` are MIT, Copyright (c) 2026 Lauren Tan. That notice is [.cursor/PSTACK-LICENSE](.cursor/PSTACK-LICENSE). The pin is recorded in [.cursor/PSTACK-VENDOR.md](.cursor/PSTACK-VENDOR.md).
+The patches are derived from Hyprland and Aquamarine. Both of those projects use the BSD 3-Clause license, and the patches stay under that license. Scripts, docs, and the C clients under `clients/` in this repository are also BSD 3-Clause. See [LICENSE](LICENSE). The vendored pstack skills under `.cursor/` are MIT, Copyright (c) 2026 Lauren Tan. That notice is [.cursor/PSTACK-LICENSE](.cursor/PSTACK-LICENSE). The pin is recorded in [.cursor/PSTACK-VENDOR.md](.cursor/PSTACK-VENDOR.md).
 
 ## Status
 
@@ -82,8 +82,23 @@ Right pane:
 
 With no DRM fd the compositor does not advertise `zwp_linux_dmabuf_v1` or `wl_drm`. Foot's buffers in the proof were `wl_shm`.
 
+## Frame timing
+
+`scripts/measure-fps.sh` rebuilds `clients/frame-timer.c` and runs it on `HEADLESS-1` with `LIBGL_ALWAYS_SOFTWARE=1` and `GALLIUM_DRIVER=llvmpipe`. The client is a fullscreen xdg-shell surface, 1280x720, `WL_SHM_FORMAT_ARGB8888`. It has two phases. The static phase damages the buffer once, then keeps requesting `wl_surface.frame` and committing without further damage for 3000 ms. The damage phase repaints and damages the whole buffer on every callback for 5000 ms. Intervals are `CLOCK_MONOTONIC` deltas between consecutive callbacks. Frames per second are `(frames - 1) / elapsed_seconds`. Percentiles use the sorted intervals, index `round((n - 1) * p)`.
+
+Aquamarine's headless backend schedules the next frame from the current mode. `hyprctl monitors` on this run reported `1920x1080@60.00000`, `currentFormat: XRGB8888`, and `vrr: false`. At 60000 mHz the interval is `1000 * 10^9 / 60000` nanoseconds, 16.667 ms. If the deadline has already passed, the callback is queued as an idle event.
+
+One run of `./scripts/measure-fps.sh`:
+
+| Phase | Frames | Elapsed | FPS | Interval min | mean | p50 | p95 | max |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| static | 176 | 3.008135 s | 58.176 | 6.149 ms | 17.189 ms | 16.670 ms | 18.257 ms | 101.941 ms |
+| damage | 302 | 5.013910 s | 60.033 | 14.581 ms | 16.658 ms | 16.642 ms | 18.036 ms | 18.864 ms |
+
+The static mean sits above the p50 because one interval was 101.941 ms.
+
 ## Limits
 
-There is no pixman renderer and no udmabuf path. Xwayland is configured off, and the Xwayland sources still compile. Input is untested. The monitor rule asks for 1920x1080 at 60 Hz. That number is the mode request, not a measured frame rate. `foot` is not built by `scripts/build.sh`. The foot proof also needs `neofetch`, `pciutils`, and `mesa-utils` on the host.
+There is no pixman renderer and no udmabuf path. Xwayland is configured off, and the Xwayland sources still compile. Input is untested. `foot` is not built by `scripts/build.sh`. The foot proof also needs `neofetch`, `pciutils`, and `mesa-utils` on the host.
 
 `CMonitorState::ensureBufferPresent` returns early only when the pending buffer is a dmabuf whose fourcc matches `m_drmFormat`. The headless swapchain buffers are shm. `CSHMBuffer` stores `DRM_FORMAT_XRGB8888` (the log names it XR24), so `dmabuf().success` is false. Each `commit()` and each `test()` then logs `no buffer or mismatched format, attaching one from the swapchain for modeset being possible`, attaches `swapchain->next(nullptr)`, and calls `rollback()`. One `grim -o HEADLESS-1` of the empty desktop logged that line 73 times. The Hyprland patch now also returns early when `shm().success` is set and `shm().format` matches `m_drmFormat`. The same capture then logged the line once, on the first mode test, before any buffer was pending. Later commits kept the shm buffer, and grim still wrote a 1920x1080 PNG.

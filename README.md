@@ -20,7 +20,38 @@ Background is in [docs/PRIOR-ART.md](docs/PRIOR-ART.md) and [docs/FEASIBILITY.md
 
 `scripts/build.sh` rebuilds the pinned tags into `.build/prefix`. That directory is gitignored, along with cloned upstream trees, other build directories, the install prefix, the runtime directory, logs, editor files, and PNG files outside `proof/`. The screenshots in `proof/` stay tracked. The script does not install anything under `/usr`.
 
-Hyprland is `efb50993780079460b0cbed1363e2166a2de1d9f`. Aquamarine is `f31c47a1b9d300847d8fc3108ad959448103dfc1`. This tree needs gcc 15, CMake 3.31 or newer, and Meson 1.4 or newer. `scripts/build.sh` downloads CMake 3.31.8 and uses `gcc-15` and `g++-15`. The build that produced the proofs ran on Ubuntu 24.04.5 with gcc 15.2.0, CMake 3.31.8, and Meson 1.12.1. A single clean timing of the whole prefix was not recorded.
+Hyprland is `efb50993780079460b0cbed1363e2166a2de1d9f`. Aquamarine is `f31c47a1b9d300847d8fc3108ad959448103dfc1`. This tree needs gcc 15, CMake 3.31 or newer, and Meson 1.4 or newer. `scripts/build.sh` downloads CMake 3.31.8 and uses `gcc-15` and `g++-15`. Ubuntu 24.04's Meson is 1.3.2, so the script installs `meson>=1.7` with `pip install --user` when the `meson` on `PATH` is older than 1.4. wayland-protocols 1.49 marks interfaces `frozen="true"`. wayland-scanner 1.24.0 rejects that attribute, so the script builds wayland 1.25.0 when `wayland-server` is older than 1.25. `scripts/pkgconfig/pkg-config` is placed first on `PATH` and moves this prefix's `-L` flags ahead of `/usr`. Without that, CMake's `PKG_CONFIG_ALLOW_SYSTEM_LIBS` keeps `-L/usr` first and `find_library` binds the older system `libinput` and `libdisplay-info`.
+
+### Clean build timing
+
+One clean run, `rm -rf .build && ./scripts/build.sh`, on this VM. `scripts/build.sh` prints the same table and writes `.build/build-timings.tsv`. `JOBS` was the script default, 2. The compiler line from that run was `gcc-15 (Ubuntu 15.2.0-14ubuntu1~24~ppa1) 15.2.0`. CMake was 3.31.8. Meson was 1.12.1 from `~/.local/bin`, already installed, so the meson stage is the version check rather than a pip install. wayland-server from the prefix was 1.25.0.
+
+The machine was Ubuntu 24.04.5 LTS, Linux 6.12.94+ x86_64, a KVM guest. `lscpu` reported 4 CPUs, Intel Xeon model 207, BogoMIPS 4800.00. `MemTotal` was 16398384 kB (16791945216 bytes). `/dev/dri` was absent.
+
+Wall-clock total: 861.912 seconds.
+
+| Stage | Seconds |
+| --- | ---: |
+| cmake | 1.428 |
+| meson | 0.223 |
+| wayland | 4.256 |
+| wayland-protocols | 2.151 |
+| libxkbcommon | 11.037 |
+| libinput | 6.263 |
+| lua | 3.351 |
+| hyprutils | 13.954 |
+| hyprwayland-scanner | 5.886 |
+| hyprlang | 7.019 |
+| hyprcursor | 11.545 |
+| hyprgraphics | 11.838 |
+| hyprland-protocols | 0.521 |
+| hyprwire | 22.239 |
+| libdisplay-info | 2.306 |
+| aquamarine | 40.459 |
+| hyprland | 713.411 |
+| grim | 3.542 |
+| shm-window | 0.152 |
+| total | 861.912 |
 
 ```bash
 ./scripts/build.sh

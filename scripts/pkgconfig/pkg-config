@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# CMake asks pkg-config to keep system -L flags, and those come out first.
+# find_library then binds libinput.so from /usr even when PKG_CONFIG_PATH
+# found a newer prefix build. Move prefix -L flags ahead of the others.
+set -euo pipefail
+
+real=/usr/bin/pkg-config
+if [[ ! -x "$real" ]]; then
+    echo "pkg-config wrapper: /usr/bin/pkg-config is missing" >&2
+    exit 127
+fi
+
+out="$(mktemp)"
+err="$(mktemp)"
+trap 'rm -f "$out" "$err"' EXIT
+
+set +e
+"$real" "$@" >"$out" 2>"$err"
+status=$?
+set -e
+cat "$err" >&2
+if [[ "$status" -ne 0 ]]; then
+    cat "$out"
+    exit "$status"
+fi
+
+reorder=0
+for arg in "$@"; do
+    case "$arg" in
+        --libs | --libs-only-L | --libs-only-l | --static) reorder=1 ;;
+    esac
+done
+
+if [[ "$reorder" -eq 0 || -z "${PREFIX:-}" ]]; then
+    cat "$out"
+    exit 0
+fi
+
+python3 - "$PREFIX" "$out" <<'PY'
+import pathlib
+import sys
+
+prefix = sys.argv[1].rstrip("/")
+text = pathlib.Path(sys.argv[2]).read_text()
+if text == "":
+    sys.exit(0)
+newline = text.endswith("\n")
+tokens = text.split()
+prefix_l = []
+other_l = []
+rest = []
+for token in tokens:
+    if token.startswith("-L"):
+        path = token[2:]
+        if path == prefix or path.startswith(prefix + "/"):
+            prefix_l.append(token)
+        else:
+            other_l.append(token)
+    else:
+        rest.append(token)
+
+def unique(items):
+    seen = set()
+    out = []
+    for item in items:
+        if item in seen:
+            continue
+        seen.add(item)
+        out.append(item)
+    return out
+
+line = " ".join(unique(prefix_l) + unique(other_l) + rest)
+sys.stdout.write(line + ("\n" if newline or line else ""))
+PY

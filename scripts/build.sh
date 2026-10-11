@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 # Rebuild pinned Hyprland 0.56.2 and Aquamarine 0.15.1 with the headless shm patches.
 # Installs a private prefix under .build/prefix. Does not touch /usr.
+# Prints a wall-clock total and per-stage timings. A clean measurement is
+# `rm -rf .build && ./scripts/build.sh`. The same table is written to
+# .build/build-timings.tsv.
 set -euo pipefail
+
+BUILD_T0=$(date +%s.%N)
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PREFIX="${PREFIX:-$ROOT/.build/prefix}"
@@ -12,7 +17,8 @@ JOBS="${JOBS:-2}"
 
 export CC="${CC:-gcc-15}"
 export CXX="${CXX:-g++-15}"
-export PATH="$ROOT/.build/cmake/bin:$PREFIX/bin:${PATH}"
+# scripts/pkgconfig/pkg-config keeps this prefix's -L flags ahead of /usr.
+export PATH="$ROOT/scripts/pkgconfig:$ROOT/.build/cmake/bin:$PREFIX/bin:${PATH}"
 export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:$PREFIX/lib/x86_64-linux-gnu/pkgconfig:$PREFIX/share/pkgconfig:${PKG_CONFIG_PATH:-}"
 export CMAKE_PREFIX_PATH="$PREFIX${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
 export LD_LIBRARY_PATH="$PREFIX/lib:$PREFIX/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
@@ -28,13 +34,30 @@ AQUAMARINE_REV="f31c47a1b9d300847d8fc3108ad959448103dfc1"
 HYPRLAND_REV="efb50993780079460b0cbed1363e2166a2de1d9f"
 
 mkdir -p "$PREFIX" "$SRC" "$BUILD"
+TIMING_FILE="$ROOT/.build/build-timings.tsv"
+: >"$TIMING_FILE"
 
-if [[ ! -x "$CMAKE" ]]; then
-    wget -q -O /tmp/cmake-3.31.8-linux-x86_64.tar.gz \
-        https://github.com/Kitware/CMake/releases/download/v3.31.8/cmake-3.31.8-linux-x86_64.tar.gz
-    tar -C "$ROOT/.build" -xzf /tmp/cmake-3.31.8-linux-x86_64.tar.gz
-    mv "$ROOT/.build/cmake-3.31.8-linux-x86_64" "$ROOT/.build/cmake"
-fi
+stage() {
+    local name="$1"
+    shift
+    local t0 t1 secs
+    t0=$(date +%s.%N)
+    printf 'stage-start %s\n' "$name"
+    "$@"
+    t1=$(date +%s.%N)
+    secs=$(awk -v a="$t0" -v b="$t1" 'BEGIN { printf "%.3f", b - a }')
+    printf '%s\t%s\n' "$name" "$secs" >>"$TIMING_FILE"
+    printf 'stage-end %s %ss\n' "$name" "$secs"
+}
+
+finish_timings() {
+    local t1 total
+    t1=$(date +%s.%N)
+    total=$(awk -v a="$BUILD_T0" -v b="$t1" 'BEGIN { printf "%.3f", b - a }')
+    printf '%s\t%s\n' "total" "$total" >>"$TIMING_FILE"
+    echo "--- build timings (seconds) ---"
+    awk -F '\t' '{ printf "%-24s %10s\n", $1, $2 }' "$TIMING_FILE"
+}
 
 clone_tag() {
     local url="$1" dir="$2" tag="$3"
@@ -86,46 +109,68 @@ cmake_install() {
     "$CMAKE" --install "$bdir"
 }
 
-if ! meson --version | awk -F. '{ exit !($1 > 1 || ($1 == 1 && $2 >= 4)) }'; then
-    python3 -m pip install --user 'meson>=1.7' >/dev/null
-    export PATH="$HOME/.local/bin:$PATH"
-fi
-
-echo "prefix $PREFIX"
-echo "cc $($CC --version | head -1)"
-echo "cmake $($CMAKE --version | head -1)"
-echo "meson $(meson --version)"
-
-if ! pkg-config --atleast-version=1.23 wayland-server; then
-    clone_tag https://gitlab.freedesktop.org/wayland/wayland.git "$SRC/wayland" 1.24.0
-    meson_install "$SRC/wayland" -Ddocumentation=false -Dtests=false
-fi
-
-if ! pkg-config --atleast-version=1.49 wayland-protocols; then
-    clone_tag https://gitlab.freedesktop.org/wayland/wayland-protocols.git "$SRC/wayland-protocols" 1.49
-    meson_install "$SRC/wayland-protocols" -Dtests=false
-fi
-
-if ! pkg-config --atleast-version=1.11 xkbcommon; then
-    clone_tag https://github.com/xkbcommon/libxkbcommon.git "$SRC/libxkbcommon" xkbcommon-1.13.2
-    meson_install "$SRC/libxkbcommon" -Denable-docs=false -Denable-x11=false
-fi
-
-if ! pkg-config --atleast-version=1.29 libinput; then
-    clone_tag https://gitlab.freedesktop.org/libinput/libinput.git "$SRC/libinput" 1.31.3
-    meson_install "$SRC/libinput" -Ddocumentation=false -Dtests=false -Dlibwacom=false -Ddebug-gui=false
-fi
-
-if ! pkg-config --exists 'lua >= 5.5 lua < 5.6'; then
-    if [[ ! -d "$SRC/lua-5.5.0" ]]; then
-        wget -q -O /tmp/lua-5.5.0.tar.gz https://www.lua.org/ftp/lua-5.5.0.tar.gz
-        tar -C "$SRC" -xzf /tmp/lua-5.5.0.tar.gz
+stage_cmake() {
+    if [[ ! -x "$CMAKE" ]]; then
+        wget -q -O /tmp/cmake-3.31.8-linux-x86_64.tar.gz \
+            https://github.com/Kitware/CMake/releases/download/v3.31.8/cmake-3.31.8-linux-x86_64.tar.gz
+        tar -C "$ROOT/.build" -xzf /tmp/cmake-3.31.8-linux-x86_64.tar.gz
+        mv "$ROOT/.build/cmake-3.31.8-linux-x86_64" "$ROOT/.build/cmake"
     fi
-    make -C "$SRC/lua-5.5.0" -j "$JOBS" linux
-    make -C "$SRC/lua-5.5.0" INSTALL_TOP="$PREFIX" install
-    if ! pkg-config --exists 'lua >= 5.5'; then
-        mkdir -p "$PREFIX/lib/pkgconfig"
-        cat > "$PREFIX/lib/pkgconfig/lua.pc" << EOF
+}
+
+stage_meson() {
+    local ver="0"
+    if command -v meson >/dev/null 2>&1; then
+        ver="$(meson --version)"
+    fi
+    # Ubuntu 24.04 ships Meson 1.3. --user keeps the newer binary out of /usr.
+    if ! awk -v v="$ver" -F. 'BEGIN { split(v, a, "."); exit !((a[1] + 0) > 1 || ((a[1] + 0) == 1 && (a[2] + 0) >= 4)) }'; then
+        export PATH="$HOME/.local/bin:$PATH"
+        python3 -m pip install --user --break-system-packages 'meson>=1.7' >/dev/null
+    fi
+}
+
+stage_wayland() {
+    # wayland-protocols 1.49 marks interfaces frozen="true". wayland-scanner
+    # 1.24.0 rejects that attribute. 1.25.0 is the first stable scanner whose DTD allows it.
+    if ! pkg-config --atleast-version=1.25 wayland-server; then
+        clone_tag https://gitlab.freedesktop.org/wayland/wayland.git "$SRC/wayland" 1.25.0
+        meson_install "$SRC/wayland" -Ddocumentation=false -Dtests=false
+    fi
+}
+
+stage_wayland_protocols() {
+    if ! pkg-config --atleast-version=1.49 wayland-protocols; then
+        clone_tag https://gitlab.freedesktop.org/wayland/wayland-protocols.git "$SRC/wayland-protocols" 1.49
+        meson_install "$SRC/wayland-protocols" -Dtests=false
+    fi
+}
+
+stage_libxkbcommon() {
+    if ! pkg-config --atleast-version=1.11 xkbcommon; then
+        clone_tag https://github.com/xkbcommon/libxkbcommon.git "$SRC/libxkbcommon" xkbcommon-1.13.2
+        meson_install "$SRC/libxkbcommon" -Denable-docs=false -Denable-x11=false
+    fi
+}
+
+stage_libinput() {
+    if ! pkg-config --atleast-version=1.29 libinput; then
+        clone_tag https://gitlab.freedesktop.org/libinput/libinput.git "$SRC/libinput" 1.31.3
+        meson_install "$SRC/libinput" -Ddocumentation=false -Dtests=false -Dlibwacom=false -Ddebug-gui=false
+    fi
+}
+
+stage_lua() {
+    if ! pkg-config --exists 'lua >= 5.5 lua < 5.6'; then
+        if [[ ! -d "$SRC/lua-5.5.0" ]]; then
+            wget -q -O /tmp/lua-5.5.0.tar.gz https://www.lua.org/ftp/lua-5.5.0.tar.gz
+            tar -C "$SRC" -xzf /tmp/lua-5.5.0.tar.gz
+        fi
+        make -C "$SRC/lua-5.5.0" -j "$JOBS" linux
+        make -C "$SRC/lua-5.5.0" INSTALL_TOP="$PREFIX" install
+        if ! pkg-config --exists 'lua >= 5.5'; then
+            mkdir -p "$PREFIX/lib/pkgconfig"
+            cat > "$PREFIX/lib/pkgconfig/lua.pc" << EOF
 prefix=$PREFIX
 exec_prefix=\${prefix}
 libdir=\${prefix}/lib
@@ -136,52 +181,105 @@ Version: 5.5.0
 Libs: -L\${libdir} -llua -lm
 Cflags: -I\${includedir}
 EOF
+        fi
     fi
-fi
+}
 
-clone_rev https://github.com/hyprwm/hyprutils.git "$SRC/hyprutils" "$HYPRUTILS_REV"
-cmake_install "$SRC/hyprutils" "$BUILD/hyprutils"
+stage_hyprutils() {
+    clone_rev https://github.com/hyprwm/hyprutils.git "$SRC/hyprutils" "$HYPRUTILS_REV"
+    cmake_install "$SRC/hyprutils" "$BUILD/hyprutils"
+}
 
-clone_rev https://github.com/hyprwm/hyprwayland-scanner.git "$SRC/hyprwayland-scanner" "$HYPRSCANNER_REV"
-cmake_install "$SRC/hyprwayland-scanner" "$BUILD/hyprwayland-scanner"
+stage_hyprwayland_scanner() {
+    clone_rev https://github.com/hyprwm/hyprwayland-scanner.git "$SRC/hyprwayland-scanner" "$HYPRSCANNER_REV"
+    cmake_install "$SRC/hyprwayland-scanner" "$BUILD/hyprwayland-scanner"
+}
 
-clone_rev https://github.com/hyprwm/hyprlang.git "$SRC/hyprlang" "$HYPRLANG_REV"
-cmake_install "$SRC/hyprlang" "$BUILD/hyprlang"
+stage_hyprlang() {
+    clone_rev https://github.com/hyprwm/hyprlang.git "$SRC/hyprlang" "$HYPRLANG_REV"
+    cmake_install "$SRC/hyprlang" "$BUILD/hyprlang"
+}
 
-clone_rev https://github.com/hyprwm/hyprcursor.git "$SRC/hyprcursor" "$HYPRCURSOR_REV"
-cmake_install "$SRC/hyprcursor" "$BUILD/hyprcursor"
+stage_hyprcursor() {
+    clone_rev https://github.com/hyprwm/hyprcursor.git "$SRC/hyprcursor" "$HYPRCURSOR_REV"
+    cmake_install "$SRC/hyprcursor" "$BUILD/hyprcursor"
+}
 
-clone_rev https://github.com/hyprwm/hyprgraphics.git "$SRC/hyprgraphics" "$HYPRGRAPHICS_REV"
-cmake_install "$SRC/hyprgraphics" "$BUILD/hyprgraphics"
+stage_hyprgraphics() {
+    clone_rev https://github.com/hyprwm/hyprgraphics.git "$SRC/hyprgraphics" "$HYPRGRAPHICS_REV"
+    cmake_install "$SRC/hyprgraphics" "$BUILD/hyprgraphics"
+}
 
-clone_rev https://github.com/hyprwm/hyprland-protocols.git "$SRC/hyprland-protocols" "$HYPRPROTO_REV"
-cmake_install "$SRC/hyprland-protocols" "$BUILD/hyprland-protocols"
+stage_hyprland_protocols() {
+    clone_rev https://github.com/hyprwm/hyprland-protocols.git "$SRC/hyprland-protocols" "$HYPRPROTO_REV"
+    cmake_install "$SRC/hyprland-protocols" "$BUILD/hyprland-protocols"
+}
 
-clone_rev https://github.com/hyprwm/hyprwire.git "$SRC/hyprwire" "$HYPRWIRE_REV"
-cmake_install "$SRC/hyprwire" "$BUILD/hyprwire"
+stage_hyprwire() {
+    clone_rev https://github.com/hyprwm/hyprwire.git "$SRC/hyprwire" "$HYPRWIRE_REV"
+    cmake_install "$SRC/hyprwire" "$BUILD/hyprwire"
+}
 
-if ! pkg-config --atleast-version=0.2.0 libdisplay-info; then
-    clone_tag https://gitlab.freedesktop.org/emersion/libdisplay-info.git "$SRC/libdisplay-info" 0.2.0
-    meson_install "$SRC/libdisplay-info"
-fi
+stage_libdisplay_info() {
+    if ! pkg-config --atleast-version=0.2.0 libdisplay-info; then
+        clone_tag https://gitlab.freedesktop.org/emersion/libdisplay-info.git "$SRC/libdisplay-info" 0.2.0
+        meson_install "$SRC/libdisplay-info"
+    fi
+}
 
-clone_rev https://github.com/hyprwm/aquamarine.git "$SRC/aquamarine" "$AQUAMARINE_REV"
-apply_patch "$SRC/aquamarine" "$ROOT/patches/aquamarine/0001-shm-allocator-for-headless.patch"
-cmake_install "$SRC/aquamarine" "$BUILD/aquamarine"
+stage_aquamarine() {
+    clone_rev https://github.com/hyprwm/aquamarine.git "$SRC/aquamarine" "$AQUAMARINE_REV"
+    apply_patch "$SRC/aquamarine" "$ROOT/patches/aquamarine/0001-shm-allocator-for-headless.patch"
+    cmake_install "$SRC/aquamarine" "$BUILD/aquamarine"
+}
 
-clone_rev https://github.com/hyprwm/Hyprland.git "$SRC/Hyprland" "$HYPRLAND_REV"
-apply_patch "$SRC/Hyprland" "$ROOT/patches/hyprland/0001-surfaceless-shm-headless.patch"
-git -C "$SRC/Hyprland" submodule update --init --depth 1 -- subprojects/udis86
-cmake_install "$SRC/Hyprland" "$BUILD/Hyprland" -DNO_XWAYLAND=ON -DGIT_COMMIT_HASH="$HYPRLAND_REV"
+stage_hyprland() {
+    clone_rev https://github.com/hyprwm/Hyprland.git "$SRC/Hyprland" "$HYPRLAND_REV"
+    apply_patch "$SRC/Hyprland" "$ROOT/patches/hyprland/0001-surfaceless-shm-headless.patch"
+    git -C "$SRC/Hyprland" submodule update --init --depth 1 -- subprojects/udis86
+    cmake_install "$SRC/Hyprland" "$BUILD/Hyprland" -DNO_XWAYLAND=ON -DGIT_COMMIT_HASH="$HYPRLAND_REV"
+}
 
-if [[ ! -d "$SRC/grim/.git" ]]; then
-    git clone --depth 1 --branch 1.5.0 https://gitlab.freedesktop.org/emersion/grim.git "$SRC/grim" \
-        || git clone --depth 1 https://gitlab.freedesktop.org/emersion/grim.git "$SRC/grim"
-fi
-meson_install "$SRC/grim" -Djpeg=enabled
+stage_grim() {
+    if [[ ! -d "$SRC/grim/.git" ]]; then
+        git clone --depth 1 --branch 1.5.0 https://gitlab.freedesktop.org/emersion/grim.git "$SRC/grim" \
+            || git clone --depth 1 https://gitlab.freedesktop.org/emersion/grim.git "$SRC/grim"
+    fi
+    meson_install "$SRC/grim" -Djpeg=enabled
+}
 
-"$ROOT/scripts/build-client.sh"
+stage_shm_window() {
+    "$ROOT/scripts/build-client.sh"
+}
+
+stage cmake stage_cmake
+stage meson stage_meson
+
+echo "prefix $PREFIX"
+echo "cc $($CC --version | head -1)"
+echo "cmake $($CMAKE --version | head -1)"
+echo "meson $(meson --version)"
+echo "jobs $JOBS"
+
+stage wayland stage_wayland
+stage wayland-protocols stage_wayland_protocols
+stage libxkbcommon stage_libxkbcommon
+stage libinput stage_libinput
+stage lua stage_lua
+stage hyprutils stage_hyprutils
+stage hyprwayland-scanner stage_hyprwayland_scanner
+stage hyprlang stage_hyprlang
+stage hyprcursor stage_hyprcursor
+stage hyprgraphics stage_hyprgraphics
+stage hyprland-protocols stage_hyprland_protocols
+stage hyprwire stage_hyprwire
+stage libdisplay-info stage_libdisplay_info
+stage aquamarine stage_aquamarine
+stage hyprland stage_hyprland
+stage grim stage_grim
+stage shm-window stage_shm_window
 
 echo "built $PREFIX/bin/Hyprland"
 "$PREFIX/bin/Hyprland" --version || true
 pkg-config --modversion aquamarine hyprlang hyprutils wayland-server wayland-protocols xkbcommon libinput lua
+finish_timings

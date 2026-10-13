@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
 # Prove keyboard text and a left click reach a client on the headless output.
 #
-#   scripts/test-input.sh [--timeout SEC] [--text STRING]
+#   scripts/test-input.sh [--timeout SEC] [--text STRING] [--no-window] [--no-keys] [--no-click]
 #
 # Exit 0  the client decoded the text and received BTN_LEFT
 # Exit 1  compositor, build, or usage failure
 # Exit 2  no mapped window before the timeout
 # Exit 4  the window mapped and the text never arrived
 # Exit 5  the text arrived and no left button did
+#
+# --no-window starts the compositor and does not map a client (exit 2).
+# --no-keys maps the client and does not type (exit 4).
+# --no-click types the text and does not press the button (exit 5).
 #
 # Environment overrides: INPUT_TIMEOUT, INPUT_TEXT.
 set -euo pipefail
@@ -18,6 +22,9 @@ source "$ROOT/scripts/lib-headless.sh"
 
 TIMEOUT="${INPUT_TIMEOUT:-20}"
 TEXT="${INPUT_TEXT:-KEYBOARD-OK-7741}"
+NO_WINDOW=0
+NO_KEYS=0
+NO_CLICK=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -28,6 +35,18 @@ while [[ $# -gt 0 ]]; do
         --text)
             TEXT="$2"
             shift 2
+            ;;
+        --no-window)
+            NO_WINDOW=1
+            shift
+            ;;
+        --no-keys)
+            NO_KEYS=1
+            shift
+            ;;
+        --no-click)
+            NO_CLICK=1
+            shift
             ;;
         --)
             shift
@@ -45,13 +64,12 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$TEXT" || "$TIMEOUT" -le 0 ]]; then
-    echo "usage: $0 [--timeout SEC] [--text STRING]" >&2
+    echo "usage: $0 [--timeout SEC] [--text STRING] [--no-window] [--no-keys] [--no-click]" >&2
     exit 1
 fi
 
 headless_env
 headless_require
-headless_kill_stale
 headless_prepare_runtime
 
 OUTDIR="$ROOT/.build/client"
@@ -93,16 +111,29 @@ gcc -O2 -I"$OUTDIR" -o "$PREFIX/bin/vinput" \
 headless_start "$ROOT/scripts/headless.lua"
 headless_wait || exit 1
 
-CLIENT_TIMEOUT=$((TIMEOUT + 45))
+# The pass path gives the client longer than the map wait. Forced failure
+# paths keep the client alive through that wait, then let it exit itself.
+if [[ "$NO_KEYS" -eq 1 || "$NO_CLICK" -eq 1 ]]; then
+    CLIENT_TIMEOUT=$((TIMEOUT + 8))
+else
+    CLIENT_TIMEOUT=$((TIMEOUT + 45))
+fi
 SINK_OUT="$ROOT/.build/input-sink.out"
 SINK_LOG="$ROOT/.build/input-sink.log"
-"$PREFIX/bin/input-sink" \
-    --text "$TEXT" \
-    --timeout "$CLIENT_TIMEOUT" \
-    --kb-bound "$KB_BOUND" \
-    --ptr-bound "$PTR_BOUND" \
-    >"$SINK_OUT" 2>"$SINK_LOG" &
-SINK_PID=$!
+: >"$SINK_OUT"
+: >"$SINK_LOG"
+if [[ "$NO_WINDOW" -eq 1 ]]; then
+    headless_spawn sleep $((TIMEOUT + 30))
+    SINK_PID=$HEADLESS_LAST_PID
+else
+    headless_spawn "$PREFIX/bin/input-sink" \
+        --text "$TEXT" \
+        --timeout "$CLIENT_TIMEOUT" \
+        --kb-bound "$KB_BOUND" \
+        --ptr-bound "$PTR_BOUND" \
+        >"$SINK_OUT" 2>"$SINK_LOG"
+    SINK_PID=$HEADLESS_LAST_PID
+fi
 
 deadline=$((SECONDS + TIMEOUT))
 mapped=0
@@ -132,8 +163,10 @@ if [[ "$mapped" -ne 1 ]]; then
     exit 2
 fi
 
+if [[ "$NO_KEYS" -eq 0 ]]; then
 "$PREFIX/bin/hyprctl" dispatch focuswindow "class:input-sink" >/dev/null || true
 
+if [[ "$NO_CLICK" -eq 0 ]]; then
 read -r CX CY < <("$PREFIX/bin/hyprctl" clients -j | python3 -c '
 import json, sys
 clients = json.load(sys.stdin)
@@ -148,6 +181,7 @@ for client in clients:
 raise SystemExit("input-sink window missing")
 ')
 echo "test-input click ${CX},${CY}" >&2
+fi
 
 TYPE_LOG="$ROOT/.build/vinput-type.log"
 set +e
@@ -165,6 +199,7 @@ if [[ "$type_ec" -ne 0 ]]; then
     exit 1
 fi
 
+if [[ "$NO_CLICK" -eq 0 ]]; then
 PTR_LOG="$ROOT/.build/vinput-pointer.log"
 set +e
 VINPUT_WAIT_POINTER="$PTR_BOUND" "$PREFIX/bin/vinput" drag "$CX" "$CY" "$CX" "$CY" >"$PTR_LOG" 2>&1
@@ -180,9 +215,16 @@ if [[ "$ptr_ec" -ne 0 ]]; then
     echo "test-input status=compositor exit=1 vinput-pointer=${ptr_ec}" >&2
     exit 1
 fi
+fi
+fi
 
 sink_ec=1
-for _ in $(seq 1 40); do
+PTR_LOG="${PTR_LOG:-}"
+sink_deadline=$((SECONDS + 10))
+if [[ "$NO_KEYS" -eq 1 || "$NO_CLICK" -eq 1 ]]; then
+    sink_deadline=$((SECONDS + CLIENT_TIMEOUT + 2))
+fi
+while ((SECONDS < sink_deadline)); do
     if ! kill -0 "$SINK_PID" 2>/dev/null; then
         set +e
         wait "$SINK_PID"

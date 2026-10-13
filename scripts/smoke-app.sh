@@ -63,7 +63,6 @@ fi
 
 headless_env
 headless_require
-headless_kill_stale
 headless_prepare_runtime
 mkdir -p "$(dirname "$SHOT")" "$ROOT/.build"
 trap 'ec=$?; headless_stop; exit "$ec"' EXIT
@@ -71,8 +70,8 @@ trap 'ec=$?; headless_stop; exit "$ec"' EXIT
 headless_start "$ROOT/scripts/headless.lua"
 headless_wait || exit 1
 
-"${CMD[@]}" >"$ROOT/.build/smoke-app.log" 2>&1 &
-APP_PID=$!
+headless_spawn "${CMD[@]}" >"$ROOT/.build/smoke-app.log" 2>&1
+APP_PID=$HEADLESS_LAST_PID
 
 python_match='
 import json, os, sys

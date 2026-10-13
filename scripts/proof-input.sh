@@ -19,7 +19,6 @@ fi
 
 headless_env
 headless_require
-headless_kill_stale
 headless_prepare_runtime
 trap 'ec=$?; headless_stop; exit "$ec"' EXIT
 
@@ -47,11 +46,11 @@ headless_start "$ROOT/scripts/headless.lua"
 headless_wait
 
 export PS1='$ '
-foot -a proof-input -T proof-input -o dpi-aware=no -o pad=8x8 \
+headless_spawn foot -a proof-input -T proof-input -o dpi-aware=no -o pad=8x8 \
     -f "JetBrains Mono:pixelsize=32" \
     bash --noprofile --norc \
-    >"$ROOT/.build/foot-input.log" 2>&1 &
-FOOT_PID=$!
+    >"$ROOT/.build/foot-input.log" 2>&1
+FOOT_PID=$HEADLESS_LAST_PID
 
 mapped=0
 for _ in $(seq 1 40); do

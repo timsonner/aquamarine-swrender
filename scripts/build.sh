@@ -10,6 +10,7 @@ BUILD_T0=$(date +%s.%N)
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PREFIX="${PREFIX:-$ROOT/.build/prefix}"
+export PREFIX
 SRC="${SRC:-$ROOT/.build/src}"
 BUILD="${BUILD:-$ROOT/.build/build}"
 CMAKE="${CMAKE:-$ROOT/.build/cmake/bin/cmake}"

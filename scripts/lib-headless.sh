@@ -28,11 +28,11 @@ headless_require() {
 
 headless_kill_stale() {
     local name
-    for name in Hyprland start-hyprland shm-window foot frame-timer vinput; do
+    for name in Hyprland start-hyprland shm-window foot frame-timer vinput input-sink; do
         pkill -x "$name" 2>/dev/null || true
     done
     sleep 0.3
-    for name in Hyprland start-hyprland shm-window foot frame-timer vinput; do
+    for name in Hyprland start-hyprland shm-window foot frame-timer vinput input-sink; do
         pkill -9 -x "$name" 2>/dev/null || true
     done
     sleep 0.2

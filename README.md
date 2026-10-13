@@ -85,7 +85,19 @@ With no DRM fd the compositor does not advertise `zwp_linux_dmabuf_v1` or `wl_dr
 
 ## Frame timing
 
-`scripts/measure-fps.sh` rebuilds `clients/frame-timer.c` and runs it on `HEADLESS-1` with `LIBGL_ALWAYS_SOFTWARE=1` and `GALLIUM_DRIVER=llvmpipe`. The client is a fullscreen xdg-shell surface, 1280x720, `WL_SHM_FORMAT_ARGB8888`. It has two phases. The static phase damages the buffer once, then keeps requesting `wl_surface.frame` and committing without further damage for 3000 ms. The damage phase repaints and damages the whole buffer on every callback for 5000 ms. Intervals are `CLOCK_MONOTONIC` deltas between consecutive callbacks. Frames per second are `(frames - 1) / elapsed_seconds`. Percentiles use the sorted intervals, index `round((n - 1) * p)`.
+`scripts/measure-fps.sh` rebuilds `clients/frame-timer.c` and runs it on `HEADLESS-1` with `LIBGL_ALWAYS_SOFTWARE=1` and `GALLIUM_DRIVER=llvmpipe`. The client is a fullscreen xdg-shell surface, 1280x720, `WL_SHM_FORMAT_ARGB8888`. It has two phases. The static phase damages the buffer once, then keeps requesting `wl_surface.frame` and committing without further damage for 3000 ms. The damage phase is the animating client: it repaints and damages the whole buffer on every callback for 5000 ms. Each phase is a fixed window (`--static-ms`, `--damage-ms`). Intervals are `CLOCK_MONOTONIC` deltas between consecutive callbacks. Frames per second are `(frames - 1) / elapsed_seconds`. Percentiles use the sorted intervals, index `round((n - 1) * p)`.
+
+```bash
+scripts/measure-fps.sh [--static-ms N] [--damage-ms N]
+```
+
+| Exit | Meaning |
+| --- | --- |
+| 0 | The damage phase printed fps, p50, p95, and max |
+| 1 | The compositor died, the client build failed, or the arguments are wrong |
+| 2 | The client finished and the damage phase has too few frames for a distribution |
+
+The script refuses to start when `/dev/dri` exists. It creates a private runtime directory and a private `HOME` with `mktemp`, ignores any inherited `XDG_RUNTIME_DIR`, refuses a path under `/run/user`, and on exit signals only the process groups it started.
 
 Aquamarine's headless backend schedules the next frame from the current mode. `hyprctl monitors` on this run reported `1920x1080@60.00000`, `currentFormat: XRGB8888`, and `vrr: false`. At 60000 mHz the interval is `1000 * 10^9 / 60000` nanoseconds, 16.667 ms. If the deadline has already passed, the callback is queued as an idle event.
 

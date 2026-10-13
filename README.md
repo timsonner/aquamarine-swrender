@@ -25,34 +25,34 @@ Hyprland is `efb50993780079460b0cbed1363e2166a2de1d9f`. Aquamarine is `f31c47a1b
 
 ### Clean build timing
 
-One clean run, `rm -rf .build && ./scripts/build.sh`, on this VM. `scripts/build.sh` prints the same table and writes `.build/build-timings.tsv`. `JOBS` was the script default, 2. The compiler line from that run was `gcc-15 (Ubuntu 15.2.0-14ubuntu1~24~ppa1) 15.2.0`. CMake was 3.31.8. Meson was 1.12.1 from `~/.local/bin`, already installed, so the meson stage is the version check rather than a pip install. wayland-server from the prefix was 1.25.0.
+MEASURED, one clean run, `rm -rf .build && ./scripts/build.sh`, on this VM. Exit 0. `scripts/build.sh` prints the same table and writes `.build/build-timings.tsv`. `JOBS` was the script default, 2. The compiler line from that run was `gcc-15 (Ubuntu 15.2.0-14ubuntu1~24~ppa1) 15.2.0`. CMake was 3.31.8. Meson was 1.12.1 from `~/.local/bin`, already installed, so the meson stage is the version check rather than a pip install. wayland-server from the prefix was 1.25.0.
 
-The machine was Ubuntu 24.04.5 LTS, Linux 6.12.94+ x86_64, a KVM guest. `lscpu` reported 4 CPUs, Intel Xeon model 207, BogoMIPS 4800.00. `MemTotal` was 16398384 kB (16791945216 bytes). `/dev/dri` was absent.
+The machine was Ubuntu 24.04.5 LTS, Linux 6.12.94+ x86_64, a KVM guest. `lscpu` reported 4 CPUs, model name `Intel(R) Xeon(R) Processor`, model 207, BogoMIPS 4800.00. `MemTotal` was 16387416 kB (16780713984 bytes). `/dev/dri` was absent. Load average at the start of the run was 0.18.
 
-Wall-clock total: 861.912 seconds.
+Wall-clock total: 856.165 seconds.
 
 | Stage | Seconds |
 | --- | ---: |
-| cmake | 1.428 |
-| meson | 0.223 |
-| wayland | 4.256 |
-| wayland-protocols | 2.151 |
-| libxkbcommon | 11.037 |
-| libinput | 6.263 |
-| lua | 3.351 |
-| hyprutils | 13.954 |
-| hyprwayland-scanner | 5.886 |
-| hyprlang | 7.019 |
-| hyprcursor | 11.545 |
-| hyprgraphics | 11.838 |
-| hyprland-protocols | 0.521 |
-| hyprwire | 22.239 |
-| libdisplay-info | 2.306 |
-| aquamarine | 40.459 |
-| hyprland | 713.411 |
-| grim | 3.542 |
-| shm-window | 0.152 |
-| total | 861.912 |
+| cmake | 1.202 |
+| meson | 0.172 |
+| wayland | 4.398 |
+| wayland-protocols | 2.713 |
+| libxkbcommon | 10.551 |
+| libinput | 6.672 |
+| lua | 3.342 |
+| hyprutils | 13.091 |
+| hyprwayland-scanner | 5.911 |
+| hyprlang | 7.043 |
+| hyprcursor | 11.285 |
+| hyprgraphics | 10.931 |
+| hyprland-protocols | 0.518 |
+| hyprwire | 22.164 |
+| libdisplay-info | 2.862 |
+| aquamarine | 40.260 |
+| hyprland | 708.703 |
+| grim | 3.883 |
+| shm-window | 0.146 |
+| total | 856.165 |
 
 ```bash
 ./scripts/build.sh
@@ -101,14 +101,14 @@ The script refuses to start when `/dev/dri` exists. It creates a private runtime
 
 Aquamarine's headless backend schedules the next frame from the current mode. `hyprctl monitors` on this run reported `1920x1080@60.00000`, `currentFormat: XRGB8888`, and `vrr: false`. At 60000 mHz the interval is `1000 * 10^9 / 60000` nanoseconds, 16.667 ms. If the deadline has already passed, the callback is queued as an idle event.
 
-One run of `./scripts/measure-fps.sh`:
+MEASURED, one run of `./scripts/measure-fps.sh`, exit 0, stderr empty. Load average at the start was 0.11. The machine is the one in the clean-build section: 4 CPUs, model name `Intel(R) Xeon(R) Processor`, model 207.
 
 | Phase | Frames | Elapsed | FPS | Interval min | mean | p50 | p95 | max |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| static | 176 | 3.008135 s | 58.176 | 6.149 ms | 17.189 ms | 16.670 ms | 18.257 ms | 101.941 ms |
-| damage | 302 | 5.013910 s | 60.033 | 14.581 ms | 16.658 ms | 16.642 ms | 18.036 ms | 18.864 ms |
+| static | 175 | 3.001264 s | 57.976 | 5.825 ms | 17.249 ms | 16.670 ms | 17.786 ms | 127.311 ms |
+| damage | 302 | 5.013695 s | 60.036 | 14.679 ms | 16.657 ms | 16.585 ms | 18.219 ms | 19.022 ms |
 
-The static mean sits above the p50 because one interval was 101.941 ms.
+The static mean sits above the p50 because one interval was 127.311 ms. The damage-phase p50 is 16.585 ms, beside the 16.667 ms mode interval. A `ps` sample of this command a few minutes earlier on this VM showed Hyprland near one core and `frame-timer` under 1% CPU. The animating rate follows the 60 Hz mode clock. After the run, no `Hyprland` process and no `/tmp/hypr-rt.*` or `/tmp/hypr-home.*` directory remained.
 
 ## Input
 

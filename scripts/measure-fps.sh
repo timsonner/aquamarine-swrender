@@ -30,7 +30,6 @@ done
 
 headless_env
 headless_require
-headless_kill_stale
 headless_prepare_runtime
 trap 'ec=$?; headless_stop; exit "$ec"' EXIT
 

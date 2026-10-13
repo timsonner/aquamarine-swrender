@@ -119,18 +119,28 @@ static void type_text(const char *text) {
     wl_display_roundtrip(display);
 }
 
+static void check_display(const char *where) {
+    int err = wl_display_get_error(display);
+    if (err)
+        fprintf(stderr, "vinput: display error at %s: %d %s\n", where, err, strerror(err));
+}
+
 static void pointer_at(uint32_t x, uint32_t y) {
     zwlr_virtual_pointer_v1_motion_absolute(pointer, now_ms(), x, y, extent_w, extent_h);
     zwlr_virtual_pointer_v1_frame(pointer);
     wl_display_flush(display);
-    wl_display_roundtrip(display);
+    if (wl_display_roundtrip(display) < 0)
+        fprintf(stderr, "vinput: motion roundtrip failed\n");
+    check_display("motion");
 }
 
 static void pointer_button(int pressed) {
     zwlr_virtual_pointer_v1_button(pointer, now_ms(), BTN_LEFT, pressed ? 1 : 0);
     zwlr_virtual_pointer_v1_frame(pointer);
     wl_display_flush(display);
-    wl_display_roundtrip(display);
+    if (wl_display_roundtrip(display) < 0)
+        fprintf(stderr, "vinput: button roundtrip failed\n");
+    check_display("button");
 }
 
 static void pointer_drag(uint32_t x1, uint32_t y1, uint32_t x2, uint32_t y2) {
@@ -148,6 +158,19 @@ static void pointer_drag(uint32_t x1, uint32_t y1, uint32_t x2, uint32_t y2) {
         usleep(15000);
     }
     pointer_button(0);
+}
+
+static void wait_for_env_file(const char *env_name) {
+    const char *path = getenv(env_name);
+    if (!path || !path[0])
+        return;
+    for (int i = 0; i < 400; i++) {
+        if (access(path, F_OK) == 0)
+            return;
+        usleep(50000);
+    }
+    fprintf(stderr, "vinput: timed out waiting for %s (%s)\n", env_name, path);
+    exit(1);
 }
 
 static void setup_keymap(void) {
@@ -239,6 +262,8 @@ int main(int argc, char **argv) {
             return 1;
         }
         setup_keymap();
+        /* Set by the input test so keys are sent only after the client has the keymap and focus. */
+        wait_for_env_file("VINPUT_WAIT_BOUND");
         type_text(argv[argi]);
     } else if (strcmp(cmd, "click") == 0 || strcmp(cmd, "drag") == 0) {
         if (!pointer_manager) {
@@ -249,6 +274,8 @@ int main(int argc, char **argv) {
         /* The new pointer updates seat capabilities. Clients bind wl_pointer
            during this roundtrip. Motion sent before that is not delivered. */
         wl_display_roundtrip(display);
+        /* Set by the input test so the click waits until that bind has completed. */
+        wait_for_env_file("VINPUT_WAIT_POINTER");
         if (strcmp(cmd, "click") == 0) {
             if (argi + 1 >= argc) {
                 usage();

@@ -106,6 +106,24 @@ Hyprland forwards virtual-keyboard keycodes and applies modifiers from the modif
 
 `/dev/uinput` does not exist here, so ydotool cannot open a kernel device. `wtype --help` prints `Missing argument to --help` and exits. The headless backend's `setCursor` returns false. The I-beam in the shot is the cursor foot set, drawn into the frame grim captured.
 
+`scripts/test-input.sh` is the automated check for the same path. It does not launch another application's terminal. It maps `clients/input-sink`, an xdg-shell `wl_shm` window, and drives it with `clients/vinput.c`. The sink binds `wl_keyboard` when the seat grows a keyboard and writes a ready file after the keymap and `wl_keyboard.enter` have both arrived. `vinput type` waits for that file, then types the text. The sink binds `wl_pointer` when the virtual pointer appears, round-trips the bind, and writes a second ready file. `vinput drag` waits for that file, then presses `BTN_LEFT` at the center of the window. The sink exits 0 only after `xkb_state_key_get_utf8` has produced the expected text and a left button press has been delivered. The click is placed inside the 640x360 buffer at the top left of the tiled window.
+
+```bash
+scripts/test-input.sh [--timeout SEC] [--text STRING] [--no-window] [--no-keys] [--no-click]
+```
+
+`INPUT_TIMEOUT` (default 20) is how long the script waits for the window to show up in `hyprctl clients`. `INPUT_TEXT` (default `KEYBOARD-OK-7741`) is the string the sink must decode. `--no-window` starts the compositor and does not map a client. `--no-keys` maps the client and does not type. `--no-click` types the text and does not press the button. The script refuses to start when `/dev/dri` exists. It creates a private runtime directory and a private `HOME` with `mktemp`, ignores any inherited `XDG_RUNTIME_DIR`, and on exit signals only the process groups it started.
+
+| Exit | Meaning |
+| --- | --- |
+| 0 | The client decoded the text and received a left button press |
+| 1 | The compositor died, the client build failed, or the arguments are wrong |
+| 2 | No mapped window before the timeout |
+| 4 | A window mapped and the text never arrived |
+| 5 | The text arrived and no left button did |
+
+MEASURED: `./scripts/test-input.sh` exited 0. The client printed `input-sink status=pass text=KEYBOARD-OK-7741 buttons=1 motions=1 code=0`. The click was 248,208. `./scripts/test-input.sh --timeout 3 --no-window` exited 2 (`no-window`, `no open windows`). `./scripts/test-input.sh --timeout 12 --no-keys` exited 4 (`input-sink status=no-keyboard text= buttons=0 motions=0 code=4`). `./scripts/test-input.sh --timeout 12 --no-click` exited 5 (`input-sink status=no-pointer text=KEYBOARD-OK-7741 buttons=0 motions=0 code=5`). `./scripts/test-input.sh --nope` exited 1. After each run, no `Hyprland` process and no `/tmp/hypr-rt.*` directory remained.
+
 ## Smoke
 
 `scripts/smoke-app.sh` launches one command inside the headless session, waits until `hyprctl clients -j` lists a mapped window, takes `grim -o HEADLESS-1`, and measures the population variance of Rec. 709 luminance in that window's rectangle (`at` and `size`). A crop larger than 250000 pixels is sampled on a stride of 2.
@@ -114,7 +132,7 @@ Hyprland forwards virtual-keyboard keycodes and applies modifiers from the modif
 scripts/smoke-app.sh [--timeout SEC] [--shot PATH] [--min-variance N] [--class NAME] -- CMD [ARGS...]
 ```
 
-`--class` keeps a client whose class, initial class, or title contains that string. The same values can be set with `SMOKE_TIMEOUT` (default 20), `SMOKE_SHOT` (default `.build/smoke-app.png`), and `SMOKE_MIN_VARIANCE` (default 25). The script refuses to start when `/dev/dri` exists.
+`--class` keeps a client whose class, initial class, or title contains that string. The same values can be set with `SMOKE_TIMEOUT` (default 20), `SMOKE_SHOT` (default `.build/smoke-app.png`), and `SMOKE_MIN_VARIANCE` (default 25). The script refuses to start when `/dev/dri` exists. It uses the same private runtime, private `HOME`, and process-group cleanup as `scripts/test-input.sh`.
 
 | Exit | Meaning |
 | --- | --- |
@@ -123,7 +141,7 @@ scripts/smoke-app.sh [--timeout SEC] [--shot PATH] [--min-variance N] [--class N
 | 2 | No mapped window before the timeout |
 | 3 | A window mapped and the crop is under the variance threshold |
 
-On this VM, `scripts/smoke-app.sh` with no arguments exited 1. `scripts/smoke-app.sh --timeout 2 -- true` exited 2. `scripts/smoke-app.sh --timeout 15 --class shm-window -- .build/prefix/bin/shm-window` exited 0 with variance 1774.3871 on a 1744x904 crop at 88,88. The same command with `--min-variance 1000000` exited 3 with variance 1707.5459. Replacing `grim` with a program that exits 1 made the script exit 1 and print `grim-failed`.
+On this VM, MEASURED again: `scripts/smoke-app.sh` with no arguments exited 1. `scripts/smoke-app.sh --timeout 2 -- true` exited 2. `scripts/smoke-app.sh --timeout 20 --class shm-window -- .build/prefix/bin/shm-window` exited 0 with variance 1726.1557, 394144 samples, on a 1744x904 crop at 88,88. The same command with `--min-variance 1000000` exited 3 with variance 1791.9980. Replacing `grim` with a program that exits 1 made the script exit 1 and print `grim-failed`. `grim` was restored afterward.
 
 ## Limits
 
